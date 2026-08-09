@@ -38,7 +38,9 @@ class AppStatus(str, Enum):
     COLLEGE_REVISED = "college_revised_submission_received"
     AWAITING_COLLEGE_DECISION = "awaiting_college_decision"
     SCIENTIFICALLY_RECOMMENDED = "scientifically_recommended"
+    NOT_SCIENTIFICALLY_RECOMMENDED = "not_scientifically_recommended"
     RETURNED_TO_IRB = "returned_to_irb_secretariat"
+    DIRECT_IRB = "direct_irb_secretariat_pathway"
     IRB_CLASSIFICATION = "irb_review_classification"
     AWAITING_IRB_REVIEWER = "awaiting_irb_reviewer_assignment"
     IRB_REVIEW = "under_irb_ethical_review"
@@ -52,6 +54,13 @@ class AppStatus(str, Enum):
     REJECTED = "rejected"
     CLEARANCE_ISSUED = "ethical_clearance_issued"
     ACTIVE = "active_study"
+    AMENDMENT_PENDING = "amendment_pending"
+    RENEWAL_PENDING = "renewal_pending"
+    ADVERSE_EVENT_PENDING = "adverse_event_pending"
+    CLOSURE_PENDING = "study_closure_pending"
+    EXPIRED = "expired"
+    SUSPENDED = "suspended"
+    REVOKED = "revoked"
     CLOSED = "closed"
 
 
@@ -153,6 +162,128 @@ class ReviewerAssignment(Base):
 
     application = relationship("EthicsApplication", back_populates="assignments")
     reviewer = relationship("User", foreign_keys=[reviewer_id])
+
+
+class ReviewAssignmentMeta(Base):
+    __tablename__ = "review_assignment_meta"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uuid4_str)
+    assignment_id: Mapped[str] = mapped_column(ForeignKey("reviewer_assignments.id"), unique=True, index=True)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    assignment = relationship("ReviewerAssignment")
+
+
+class ReviewerDeclaration(Base):
+    __tablename__ = "reviewer_declarations"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uuid4_str)
+    assignment_id: Mapped[str] = mapped_column(ForeignKey("reviewer_assignments.id"), unique=True, index=True)
+    declaration: Mapped[str] = mapped_column(String(30))  # clear | conflict
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    declared_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    assignment = relationship("ReviewerAssignment")
+
+
+class CollegeDecision(Base):
+    __tablename__ = "college_decisions"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uuid4_str)
+    application_id: Mapped[str] = mapped_column(ForeignKey("applications.id"), index=True)
+    decision: Mapped[str] = mapped_column(String(80))
+    comments: Mapped[str | None] = mapped_column(Text, nullable=True)
+    meeting_reference: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    decided_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    decided_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    application = relationship("EthicsApplication")
+
+
+class IRBClassification(Base):
+    __tablename__ = "irb_classifications"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uuid4_str)
+    application_id: Mapped[str] = mapped_column(ForeignKey("applications.id"), index=True)
+    classification: Mapped[str] = mapped_column(String(30))  # exempt | expedited | full_board
+    rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+    classified_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    classified_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    application = relationship("EthicsApplication")
+
+
+class IRBMeeting(Base):
+    __tablename__ = "irb_meetings"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uuid4_str)
+    meeting_no: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    meeting_date: Mapped[datetime] = mapped_column(DateTime)
+    venue: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    meeting_link: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="scheduled")
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    items = relationship("IRBMeetingItem", back_populates="meeting", cascade="all, delete-orphan")
+
+
+class IRBMeetingItem(Base):
+    __tablename__ = "irb_meeting_items"
+    __table_args__ = (UniqueConstraint("meeting_id", "application_id", name="uq_meeting_application"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uuid4_str)
+    meeting_id: Mapped[str] = mapped_column(ForeignKey("irb_meetings.id"), index=True)
+    application_id: Mapped[str] = mapped_column(ForeignKey("applications.id"), index=True)
+    agenda_no: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    added_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    meeting = relationship("IRBMeeting", back_populates="items")
+    application = relationship("EthicsApplication")
+
+
+class IRBDecision(Base):
+    __tablename__ = "irb_decisions"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uuid4_str)
+    application_id: Mapped[str] = mapped_column(ForeignKey("applications.id"), index=True)
+    decision: Mapped[str] = mapped_column(String(50))
+    conditions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    meeting_id: Mapped[str | None] = mapped_column(ForeignKey("irb_meetings.id"), nullable=True)
+    decided_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    decided_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    application = relationship("EthicsApplication")
+    meeting = relationship("IRBMeeting")
+
+
+class ClearanceCertificate(Base):
+    __tablename__ = "clearance_certificates"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uuid4_str)
+    application_id: Mapped[str] = mapped_column(ForeignKey("applications.id"), index=True)
+    certificate_no: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    verification_token: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    issue_date: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    expiry_date: Mapped[datetime] = mapped_column(DateTime)
+    status: Mapped[str] = mapped_column(String(30), default="valid")
+    conditions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    issued_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    pdf_stored_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    application = relationship("EthicsApplication")
+
+
+class PostApprovalRequest(Base):
+    __tablename__ = "post_approval_requests"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uuid4_str)
+    application_id: Mapped[str] = mapped_column(ForeignKey("applications.id"), index=True)
+    request_type: Mapped[str] = mapped_column(String(40))  # amendment | renewal | adverse_event | closure
+    summary: Mapped[str] = mapped_column(Text)
+    supporting_document_id: Mapped[str | None] = mapped_column(ForeignKey("application_documents.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    submitted_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    submitted_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    decided_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    decision_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    application = relationship("EthicsApplication")
+    supporting_document = relationship("ApplicationDocument")
 
 
 class StatusHistory(Base):
