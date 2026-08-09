@@ -21,6 +21,8 @@ A working foundation for the University of Cape Coast IRB ethical clearance work
 - Status history and audit logging
 - PostgreSQL-ready SQLAlchemy data model
 - Responsive UCC-styled web interface
+- Render-compatible current `TemplateResponse(request, name, context)` API
+- Dedicated `/healthz` deployment health endpoint
 
 ## Technology
 
@@ -89,3 +91,26 @@ Before production deployment:
 ## Next development tranche
 
 The next logical module is the structured **College Scientific Review and revision cycle**, followed by **IRB ethical review classification and reviewer assignment**.
+
+
+## Render deployment
+
+Use the Docker runtime. The container binds to Render's `$PORT` automatically.
+
+Recommended health check path:
+
+```text
+/healthz
+```
+
+Required environment variables:
+
+```env
+APP_NAME=UCC Ethical Clearance Portal
+SECRET_KEY=<strong-random-secret>
+DATABASE_URL=<Render PostgreSQL Internal Database URL>
+SESSION_HTTPS_ONLY=true
+STORAGE_DIR=/app/storage
+```
+
+`postgresql://` and `postgres://` database URLs are automatically normalized to the SQLAlchemy Psycopg 3 dialect `postgresql+psycopg://`.

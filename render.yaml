@@ -3,6 +3,7 @@ services:
     name: ucc-irb-portal
     runtime: docker
     plan: starter
+    healthCheckPath: /healthz
     envVars:
       - key: SECRET_KEY
         generateValue: true
