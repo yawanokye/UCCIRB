@@ -1,5 +1,7 @@
 from datetime import datetime
 from pathlib import Path
+import secrets
+import string
 import uuid
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
@@ -9,7 +11,7 @@ from sqlalchemy.orm import Session, joinedload
 from ..database import get_db
 from ..models import (AppStatus, ApplicationDocument, College, CollegeAccessRequest,
                       EthicsApplication, ReviewerAssignment, Role, User)
-from ..services.auth import require_roles, require_user
+from ..services.auth import hash_password, require_roles, require_user
 from ..services.storage import save_upload, storage_path
 from ..services.workflow import audit, transition
 
@@ -62,11 +64,124 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     if user.role == Role.COLLEGE_REVIEWER.value:
         assignments = db.scalars(select(ReviewerAssignment).options(joinedload(ReviewerAssignment.application)).where(ReviewerAssignment.reviewer_id == user.id).order_by(ReviewerAssignment.assigned_at.desc())).all()
         return request.app.state.templates.TemplateResponse(request, 'dashboard_reviewer.html', ctx(request, user, assignments=assignments))
-    if user.role in {Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value}:
+    if user.role == Role.SUPERADMIN.value:
+        users = db.scalars(select(User).options(joinedload(User.college)).order_by(User.created_at.desc())).all()
+        colleges = db.scalars(select(College).where(College.active == True).order_by(College.name)).all()
+        admin_users = [u for u in users if u.role != Role.APPLICANT.value]
+        applicant_count = sum(1 for u in users if u.role == Role.APPLICANT.value)
+        return request.app.state.templates.TemplateResponse(
+            request, 'dashboard_admin.html',
+            ctx(request, user, users=admin_users, colleges=colleges, applicant_count=applicant_count, created_password=None, created_email=None, error=None)
+        )
+    if user.role in {Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value}:
         apps = db.scalars(select(EthicsApplication).where(EthicsApplication.status != AppStatus.DRAFT.value).order_by(EthicsApplication.updated_at.desc())).all()
         pending_access = db.scalars(select(CollegeAccessRequest).options(joinedload(CollegeAccessRequest.application)).where(CollegeAccessRequest.status == 'pending').order_by(CollegeAccessRequest.requested_at)).all()
         return request.app.state.templates.TemplateResponse(request, 'dashboard_secretariat.html', ctx(request, user, apps=apps, pending_access=pending_access))
     return request.app.state.templates.TemplateResponse(request, 'dashboard_reviewer.html', ctx(request, user, assignments=[]))
+
+def generate_temporary_password(length: int = 14) -> str:
+    alphabet = string.ascii_letters + string.digits + '!@#$%?'
+    # Guarantee at least one upper, lower and digit, then shuffle.
+    chars = [secrets.choice(string.ascii_uppercase), secrets.choice(string.ascii_lowercase), secrets.choice(string.digits), secrets.choice('!@#$%?')]
+    chars.extend(secrets.choice(alphabet) for _ in range(length - len(chars)))
+    secrets.SystemRandom().shuffle(chars)
+    return ''.join(chars)
+
+
+@router.post('/admin/users')
+def create_administrative_user(
+    request: Request,
+    full_name: str = Form(...),
+    email: str = Form(...),
+    role: str = Form(...),
+    college_id: str = Form(''),
+    temporary_password: str = Form(''),
+    db: Session = Depends(get_db),
+):
+    admin = require_user(request, db)
+    require_roles(admin, Role.SUPERADMIN.value)
+
+    allowed_roles = {
+        Role.IRB_SECRETARIAT.value,
+        Role.COLLEGE_ADMIN.value,
+        Role.COLLEGE_REVIEWER.value,
+        Role.IRB_REVIEWER.value,
+        Role.IRB_CHAIR.value,
+        Role.SUPERADMIN.value,
+    }
+    full_name = full_name.strip()
+    email = email.lower().strip()
+    users = db.scalars(select(User).options(joinedload(User.college)).order_by(User.created_at.desc())).all()
+    colleges = db.scalars(select(College).where(College.active == True).order_by(College.name)).all()
+
+    def render_error(message: str):
+        admin_users = [u for u in users if u.role != Role.APPLICANT.value]
+        applicant_count = sum(1 for u in users if u.role == Role.APPLICANT.value)
+        return request.app.state.templates.TemplateResponse(
+            request, 'dashboard_admin.html',
+            ctx(request, admin, users=admin_users, colleges=colleges, applicant_count=applicant_count, created_password=None, created_email=None, error=message),
+            status_code=400,
+        )
+
+    if role not in allowed_roles:
+        return render_error('Select a valid administrative role.')
+    if len(full_name) < 3 or '@' not in email:
+        return render_error('Enter the officer\'s full name and a valid email address.')
+    if db.scalar(select(User).where(User.email == email)):
+        return render_error('An account already exists with this email address.')
+    if role in {Role.COLLEGE_ADMIN.value, Role.COLLEGE_REVIEWER.value}:
+        if not college_id or not db.get(College, college_id):
+            return render_error('A College must be assigned to College Scientific Committee users.')
+    else:
+        college_id = ''
+
+    generated = False
+    password = temporary_password.strip()
+    if not password:
+        password = generate_temporary_password()
+        generated = True
+    elif len(password) < 8:
+        return render_error('Temporary password must be at least 8 characters, or leave it blank to generate one automatically.')
+
+    new_user = User(
+        email=email,
+        full_name=full_name,
+        role=role,
+        college_id=college_id or None,
+        password_hash=hash_password(password),
+        active=True,
+    )
+    db.add(new_user)
+    audit(db, admin.id, 'administrative_account_created', None, f'{email} | role={role}')
+    db.commit()
+
+    users = db.scalars(select(User).options(joinedload(User.college)).order_by(User.created_at.desc())).all()
+    admin_users = [u for u in users if u.role != Role.APPLICANT.value]
+    applicant_count = sum(1 for u in users if u.role == Role.APPLICANT.value)
+    return request.app.state.templates.TemplateResponse(
+        request, 'dashboard_admin.html',
+        ctx(
+            request, admin, users=admin_users, colleges=colleges, applicant_count=applicant_count,
+            created_password=password if generated else '(password set by administrator)',
+            created_email=email, error=None
+        )
+    )
+
+
+@router.post('/admin/users/{user_id}/toggle')
+def toggle_administrative_user(request: Request, user_id: str, db: Session = Depends(get_db)):
+    admin = require_user(request, db)
+    require_roles(admin, Role.SUPERADMIN.value)
+    target = db.get(User, user_id)
+    if not target or target.role == Role.APPLICANT.value:
+        raise HTTPException(404, 'Administrative user not found')
+    if target.id == admin.id:
+        raise HTTPException(400, 'You cannot deactivate your own administrator account.')
+    target.active = not target.active
+    audit(db, admin.id, 'administrative_account_status_changed', None, f'{target.email} | active={target.active}')
+    db.commit()
+    return RedirectResponse('/dashboard', status_code=303)
+
 
 @router.get('/applications/new')
 def new_application_page(request: Request, db: Session = Depends(get_db)):
