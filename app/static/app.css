@@ -76,3 +76,15 @@ table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;p
 .direct-path-alert{border-left:5px solid var(--ucc-red)}
 .status.direct_irb_secretariat_pathway{background:#fff0f1;color:#8b2830}
 @media(max-width:760px){.routing-grid{grid-template-columns:1fr}.route-notice-head{align-items:flex-start;flex-direction:column}.route-badge{white-space:normal}}
+
+/* Phase 2 V7: dedicated System Administrator portal */
+.portal-tabs-three{grid-template-columns:repeat(3,1fr)}
+.portal-tabs-three .portal-tab:nth-child(2){border-right:1px solid var(--line)}
+.system-admin-tab.active{border-bottom-color:var(--ucc-red)}
+.system-admin-tab.active .tab-icon{background:var(--ucc-red);color:#fff}
+.system-admin-panel{background:linear-gradient(180deg,#fff 0%,#fffafa 100%)}
+.system-admin-form{border-top:4px solid var(--ucc-red)}
+.system-admin-authcard{border-top:5px solid var(--ucc-red)}
+.admin-layout{display:grid;grid-template-columns:minmax(350px,.9fr) minmax(0,1.4fr);gap:20px;align-items:start}
+.credential-alert code{font-size:14px;font-weight:800}
+@media(max-width:900px){.portal-tabs-three{grid-template-columns:1fr}.portal-tabs-three .portal-tab{border-right:0!important;border-bottom:1px solid var(--line)}.admin-layout{grid-template-columns:1fr}}
