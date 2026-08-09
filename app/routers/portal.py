@@ -47,32 +47,32 @@ def can_view_documents(db: Session, user: User, app: EthicsApplication) -> bool:
 
 @router.get('/')
 def home(request: Request):
-    return request.app.state.templates.TemplateResponse('home.html', {'request': request})
+    return request.app.state.templates.TemplateResponse(request, 'home.html', {})
 
 @router.get('/dashboard')
 def dashboard(request: Request, db: Session = Depends(get_db)):
     user = require_user(request, db)
     if user.role == Role.APPLICANT.value:
         apps = db.scalars(select(EthicsApplication).where(EthicsApplication.applicant_id == user.id).order_by(EthicsApplication.created_at.desc())).all()
-        return request.app.state.templates.TemplateResponse('dashboard_applicant.html', ctx(request, user, apps=apps))
+        return request.app.state.templates.TemplateResponse(request, 'dashboard_applicant.html', ctx(request, user, apps=apps))
     if user.role == Role.COLLEGE_ADMIN.value:
         apps = db.scalars(select(EthicsApplication).where(EthicsApplication.college_id == user.college_id, EthicsApplication.status != AppStatus.DRAFT.value).order_by(EthicsApplication.updated_at.desc())).all()
         counts = {s: sum(1 for a in apps if a.status == s) for s in set(a.status for a in apps)}
-        return request.app.state.templates.TemplateResponse('dashboard_college.html', ctx(request, user, apps=apps, counts=counts))
+        return request.app.state.templates.TemplateResponse(request, 'dashboard_college.html', ctx(request, user, apps=apps, counts=counts))
     if user.role == Role.COLLEGE_REVIEWER.value:
         assignments = db.scalars(select(ReviewerAssignment).options(joinedload(ReviewerAssignment.application)).where(ReviewerAssignment.reviewer_id == user.id).order_by(ReviewerAssignment.assigned_at.desc())).all()
-        return request.app.state.templates.TemplateResponse('dashboard_reviewer.html', ctx(request, user, assignments=assignments))
+        return request.app.state.templates.TemplateResponse(request, 'dashboard_reviewer.html', ctx(request, user, assignments=assignments))
     if user.role in {Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value}:
         apps = db.scalars(select(EthicsApplication).where(EthicsApplication.status != AppStatus.DRAFT.value).order_by(EthicsApplication.updated_at.desc())).all()
         pending_access = db.scalars(select(CollegeAccessRequest).options(joinedload(CollegeAccessRequest.application)).where(CollegeAccessRequest.status == 'pending').order_by(CollegeAccessRequest.requested_at)).all()
-        return request.app.state.templates.TemplateResponse('dashboard_secretariat.html', ctx(request, user, apps=apps, pending_access=pending_access))
-    return request.app.state.templates.TemplateResponse('dashboard_reviewer.html', ctx(request, user, assignments=[]))
+        return request.app.state.templates.TemplateResponse(request, 'dashboard_secretariat.html', ctx(request, user, apps=apps, pending_access=pending_access))
+    return request.app.state.templates.TemplateResponse(request, 'dashboard_reviewer.html', ctx(request, user, assignments=[]))
 
 @router.get('/applications/new')
 def new_application_page(request: Request, db: Session = Depends(get_db)):
     user = require_user(request, db); require_roles(user, Role.APPLICANT.value)
     colleges = db.scalars(select(College).where(College.active == True).order_by(College.name)).all()
-    return request.app.state.templates.TemplateResponse('application_new.html', ctx(request, user, colleges=colleges))
+    return request.app.state.templates.TemplateResponse(request, 'application_new.html', ctx(request, user, colleges=colleges))
 
 @router.post('/applications/new')
 def new_application(request: Request, title: str = Form(...), college_id: str = Form(...), department: str = Form(''), programme: str = Form(''), applicant_type: str = Form('Student'), study_summary: str = Form(''), db: Session = Depends(get_db)):
@@ -91,7 +91,7 @@ def application_detail(request: Request, app_id: str, db: Session = Depends(get_
     reviewers = []
     if user.role == Role.COLLEGE_ADMIN.value and user.college_id == app.college_id:
         reviewers = db.scalars(select(User).where(User.college_id == app.college_id, User.role == Role.COLLEGE_REVIEWER.value, User.active == True).order_by(User.full_name)).all()
-    return request.app.state.templates.TemplateResponse('application_detail.html', ctx(request,user,app=app,documents=documents,access_requests=access,assignments=assignments,reviewers=reviewers,can_docs=can_view_documents(db,user,app)))
+    return request.app.state.templates.TemplateResponse(request, 'application_detail.html', ctx(request,user,app=app,documents=documents,access_requests=access,assignments=assignments,reviewers=reviewers,can_docs=can_view_documents(db,user,app)))
 
 @router.post('/applications/{app_id}/documents')
 def upload_document(request: Request, app_id: str, document_type: str = Form(...), file: UploadFile = File(...), db: Session = Depends(get_db)):
