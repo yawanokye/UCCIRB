@@ -295,6 +295,30 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     raise HTTPException(403)
 
 
+@router.get('/system-admin')
+def system_admin_portal(request: Request, db: Session = Depends(get_db)):
+    user = require_user(request, db)
+    require_roles(user, Role.SUPERADMIN.value)
+    users = db.scalars(select(User).options(joinedload(User.college)).order_by(User.created_at.desc())).all()
+    colleges = get_scientific_committee_colleges(db)
+    admin_users = [u for u in users if u.role != Role.APPLICANT.value]
+    applicant_count = sum(1 for u in users if u.role == Role.APPLICANT.value)
+    return request.app.state.templates.TemplateResponse(
+        request,
+        'dashboard_admin.html',
+        ctx(
+            request,
+            user,
+            users=admin_users,
+            colleges=colleges,
+            applicant_count=applicant_count,
+            created_password=None,
+            created_email=None,
+            error=None,
+        ),
+    )
+
+
 def generate_temporary_password(length: int = 14) -> str:
     alphabet = string.ascii_letters + string.digits + '!@#$%?'
     chars = [secrets.choice(string.ascii_uppercase), secrets.choice(string.ascii_lowercase), secrets.choice(string.digits), secrets.choice('!@#$%?')]
@@ -402,7 +426,7 @@ def toggle_administrative_user(request: Request, user_id: str, db: Session = Dep
     target.active = not target.active
     audit(db, admin.id, 'administrative_account_status_changed', None, f'{target.email} | active={target.active}')
     db.commit()
-    return RedirectResponse('/dashboard', status_code=303)
+    return RedirectResponse('/system-admin', status_code=303)
 
 
 @router.get('/applications/new')

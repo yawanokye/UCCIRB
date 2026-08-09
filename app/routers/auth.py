@@ -16,12 +16,15 @@ ADMIN_ROLES = {
     Role.COLLEGE_REVIEWER.value,
     Role.IRB_REVIEWER.value,
     Role.IRB_CHAIR.value,
-    Role.SUPERADMIN.value,
 }
 
 
 def normalise_portal(portal: str | None) -> str:
-    return 'administrative' if portal == 'administrative' else 'applicant'
+    if portal == 'administrative':
+        return 'administrative'
+    if portal in {'system_admin', 'system-administrator', 'superadmin'}:
+        return 'system_admin'
+    return 'applicant'
 
 
 def password_error(password: str) -> str | None:
@@ -144,19 +147,74 @@ def login(
         )
 
     if portal == 'administrative' and user.role not in ADMIN_ROLES:
+        message = (
+            'System Administrator accounts must use the System Administrator Portal.'
+            if user.role == Role.SUPERADMIN.value
+            else 'Applicant accounts must use the Applicant Login.'
+        )
+        return request.app.state.templates.TemplateResponse(
+            request,
+            'login.html',
+            {'error': message, 'portal': 'administrative'},
+            status_code=403,
+        )
+
+    if portal == 'system_admin' and user.role != Role.SUPERADMIN.value:
         return request.app.state.templates.TemplateResponse(
             request,
             'login.html',
             {
-                'error': 'Applicant accounts must use the Applicant Login.',
-                'portal': 'administrative',
+                'error': 'This login is restricted to authorised System Administrator accounts.',
+                'portal': 'system_admin',
             },
             status_code=403,
         )
 
     request.session['user_id'] = user.id
     request.session['portal'] = portal
-    return RedirectResponse('/dashboard', status_code=303)
+    target = '/system-admin' if portal == 'system_admin' else '/dashboard'
+    return RedirectResponse(target, status_code=303)
+
+
+@router.get('/system-admin/login')
+def system_admin_login_page(request: Request, db: Session = Depends(get_db)):
+    current_id = request.session.get('user_id')
+    if current_id:
+        current = db.get(User, current_id)
+        if current and current.active and current.role == Role.SUPERADMIN.value:
+            return RedirectResponse('/system-admin', status_code=303)
+    return request.app.state.templates.TemplateResponse(
+        request,
+        'login.html',
+        {'error': None, 'portal': 'system_admin'},
+    )
+
+
+@router.post('/system-admin/login')
+def system_admin_login(
+    request: Request,
+    email: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    user = db.scalar(select(User).where(User.email == email.lower().strip()))
+    if not user or not user.active or not verify_password(password, user.password_hash):
+        return request.app.state.templates.TemplateResponse(
+            request,
+            'login.html',
+            {'error': 'Invalid email or password', 'portal': 'system_admin'},
+            status_code=400,
+        )
+    if user.role != Role.SUPERADMIN.value:
+        return request.app.state.templates.TemplateResponse(
+            request,
+            'login.html',
+            {'error': 'This login is restricted to authorised System Administrator accounts.', 'portal': 'system_admin'},
+            status_code=403,
+        )
+    request.session['user_id'] = user.id
+    request.session['portal'] = 'system_admin'
+    return RedirectResponse('/system-admin', status_code=303)
 
 
 @router.get('/account/password')
@@ -200,6 +258,8 @@ def change_password(
 
 @router.post('/logout')
 def logout(request: Request):
-    portal = request.session.get('portal', 'applicant')
+    portal = normalise_portal(request.session.get('portal', 'applicant'))
     request.session.clear()
-    return RedirectResponse(f'/login?portal={normalise_portal(portal)}', status_code=303)
+    if portal == 'system_admin':
+        return RedirectResponse('/system-admin/login', status_code=303)
+    return RedirectResponse(f'/login?portal={portal}', status_code=303)
