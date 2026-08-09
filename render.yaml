@@ -13,6 +13,16 @@ services:
         fromDatabase:
           name: ucc-irb-db
           property: connectionString
+      - key: STORAGE_DIR
+        value: /app/storage
+      - key: PUBLIC_BASE_URL
+        value: https://ucc-irb-portal.onrender.com
+      - key: REVIEW_DUE_DAYS
+        value: "14"
+      - key: CLEARANCE_VALIDITY_DAYS
+        value: "365"
+      - key: MAX_UPLOAD_MB
+        value: "25"
 
 databases:
   - name: ucc-irb-db
