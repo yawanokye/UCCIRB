@@ -29,5 +29,6 @@ with SessionLocal() as db:
     ensure_user(db,'collegeadmin@ucc.edu.gh','College Scientific Committee Secretary',Role.COLLEGE_ADMIN.value,'Demo123!',by_code['CBE'])
     ensure_user(db,'reviewer@ucc.edu.gh','College Scientific Reviewer',Role.COLLEGE_REVIEWER.value,'Demo123!',by_code['CBE'])
     ensure_user(db,'chair@ucc.edu.gh','IRB Chairperson',Role.IRB_CHAIR.value,'Demo123!')
+    ensure_user(db,'admin@ucc.edu.gh','System Administrator',Role.SUPERADMIN.value,'Demo123!')
     db.commit()
 print('Seed complete. Demo password for all accounts: Demo123!')

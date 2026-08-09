@@ -118,3 +118,49 @@ STORAGE_DIR=/app/storage
 
 ## Render build verification
 After deployment, open `/healthz`. This build should report `build: 2026-08-09-template-positional-v2`. If it does not, Render is serving an older commit/build.
+
+## Split portal login (V3)
+
+The public home page now provides two clearly separated access tabs:
+
+- **Applicant Login** for researchers and students.
+- **Administrative Portal** for IRB Secretariat, College Scientific Committee officers, College/IRB reviewers, IRB Chairperson and system administrators.
+
+The login handler validates the selected portal against the user's role. Applicant accounts cannot enter through the Administrative Portal, and administrative accounts are redirected to use the administrative login.
+
+After deployment, `/healthz` should report:
+
+```text
+build: 2026-08-09-split-login-v3
+```
+
+
+## Account governance (V4)
+
+The account model now follows the required UCC governance:
+
+- **Applicants self-register** from the public Applicant Login tab. Registration automatically signs the applicant in and opens the New Ethical Clearance Application form.
+- **Administrative accounts are not publicly registrable.** They are created only by the **System Administrator** from the administrative dashboard.
+- Administrative roles supported: IRB Secretariat, College Scientific Committee Officer, College Scientific Reviewer, IRB Reviewer, IRB Chairperson and System Administrator.
+- College-level users must be assigned to a College when their account is created.
+- The System Administrator can deactivate/reactivate administrative accounts.
+- All authenticated users can change their password.
+- If an administrator leaves the temporary-password field blank, the system generates a strong one-time display password.
+
+### Bootstrap the first System Administrator on Render
+
+Add these environment variables before the first production start:
+
+```env
+BOOTSTRAP_ADMIN_EMAIL=<institutional administrator email>
+BOOTSTRAP_ADMIN_NAME=<administrator full name>
+BOOTSTRAP_ADMIN_PASSWORD=<strong initial password>
+```
+
+The bootstrap account is created only if that email does not already exist. After successful creation, the variables can remain unchanged or the password variable can be removed.
+
+After deployment, `/healthz` should report:
+
+```text
+build: 2026-08-09-account-governance-v4
+```
