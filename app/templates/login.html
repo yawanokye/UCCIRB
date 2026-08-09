@@ -1,11 +1,14 @@
 {% extends 'base.html' %}
-{% block title %}{% if portal == 'administrative' %}Administrative Login{% else %}Applicant Login{% endif %} · UCC Ethics Portal{% endblock %}
+{% block title %}{% if portal == 'system_admin' %}System Administrator Login{% elif portal == 'administrative' %}Administrative Login{% else %}Applicant Login{% endif %} · UCC Ethics Portal{% endblock %}
 {% block content %}
-<div class="authcard portal-authcard">
+<div class="authcard portal-authcard {% if portal == 'system_admin' %}system-admin-authcard{% endif %}">
   <span class="eyebrow">University of Cape Coast</span>
-  {% if portal == 'administrative' %}
+  {% if portal == 'system_admin' %}
+    <h1>System Administrator Portal</h1>
+    <p>Restricted access for authorised system administrators responsible for user accounts, roles and portal administration.</p>
+  {% elif portal == 'administrative' %}
     <h1>Administrative Portal</h1>
-    <p>For IRB Secretariat, College Scientific Committees, reviewers, IRB leadership and authorised administrators.</p>
+    <p>For the IRB Secretariat, College Scientific Committees, scientific reviewers, IRB reviewers and IRB leadership.</p>
   {% else %}
     <h1>Applicant Login</h1>
     <p>Access your ethical clearance applications, documents, revisions and status updates.</p>
@@ -13,19 +16,24 @@
 
   {% if error %}<div class="alert danger">{{ error }}</div>{% endif %}
 
-  <form method="post" action="/login">
-    <input type="hidden" name="portal" value="{{ portal }}">
-    <label>{% if portal == 'administrative' %}Institutional email{% else %}Email address{% endif %}<input type="email" name="email" autocomplete="username" required></label>
+  <form method="post" action="{% if portal == 'system_admin' %}/system-admin/login{% else %}/login{% endif %}">
+    {% if portal != 'system_admin' %}<input type="hidden" name="portal" value="{{ portal }}">{% endif %}
+    <label>{% if portal in ['administrative','system_admin'] %}Institutional email{% else %}Email address{% endif %}<input type="email" name="email" autocomplete="username" required></label>
     <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
-    <button class="btn full">{% if portal == 'administrative' %}Sign in to Administrative Portal{% else %}Sign in as Applicant{% endif %}</button>
+    <button class="btn full {% if portal == 'system_admin' %}red{% endif %}">{% if portal == 'system_admin' %}Sign in as System Administrator{% elif portal == 'administrative' %}Sign in to Administrative Portal{% else %}Sign in as Applicant{% endif %}</button>
   </form>
 
   <div class="portal-switch">
-    {% if portal == 'administrative' %}
-      <a href="/login?portal=applicant">Go to Applicant Login</a>
+    {% if portal == 'system_admin' %}
+      <a href="/">Return to portal home</a><br><br>
+      <a href="/login?portal=administrative">Administrative Portal Login</a>
+    {% elif portal == 'administrative' %}
+      <a href="/login?portal=applicant">Go to Applicant Login</a><br><br>
+      <a href="/system-admin/login">System Administrator Login</a>
     {% else %}
       <a href="/register"><strong>Create Applicant Account</strong></a><br><br>
-      <a href="/login?portal=administrative">Go to Administrative Portal</a>
+      <a href="/login?portal=administrative">Go to Administrative Portal</a><br><br>
+      <a href="/system-admin/login">System Administrator Login</a>
     {% endif %}
   </div>
 </div>

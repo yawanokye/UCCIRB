@@ -27,9 +27,9 @@
 {% if user %}
 <nav class="nav">
   <div class="nav-inner">
-    <a href="/dashboard">Dashboard</a>
+    {% if user.role == 'superadmin' %}<a href="/system-admin">System Administration</a>{% else %}<a href="/dashboard">Dashboard</a>{% endif %}
     {% if user.role == 'applicant' %}<a href="/applications/new">New Application</a>{% endif %}
-    {% if user.role in ['irb_secretariat','irb_chair','superadmin'] %}<a href="/irb/meetings">IRB Meetings</a>{% endif %}
+    {% if user.role in ['irb_secretariat','irb_chair'] %}<a href="/irb/meetings">IRB Meetings</a>{% endif %}
     <a href="/account/password">Change Password</a>
   </div>
 </nav>

@@ -41,7 +41,7 @@
     <p>Use the login area that matches your role.</p>
   </div>
 
-  <div class="portal-tabs" role="tablist" aria-label="Portal login options">
+  <div class="portal-tabs portal-tabs-three" role="tablist" aria-label="Portal login options">
     <button class="portal-tab active" id="applicant-tab" type="button" role="tab" aria-selected="true" aria-controls="applicant-panel" data-panel="applicant-panel">
       <span class="tab-icon">A</span>
       <span><strong>Applicant Login</strong><small>Researchers and students</small></span>
@@ -49,6 +49,10 @@
     <button class="portal-tab" id="admin-tab" type="button" role="tab" aria-selected="false" aria-controls="admin-panel" data-panel="admin-panel">
       <span class="tab-icon">IRB</span>
       <span><strong>Administrative Portal</strong><small>Committees, reviewers and IRB officers</small></span>
+    </button>
+    <button class="portal-tab system-admin-tab" id="system-admin-tab" type="button" role="tab" aria-selected="false" aria-controls="system-admin-panel" data-panel="system-admin-panel">
+      <span class="tab-icon">SA</span>
+      <span><strong>System Administrator</strong><small>Accounts, roles and system access</small></span>
     </button>
   </div>
 
@@ -78,14 +82,13 @@
     <div class="portal-panel-copy">
       <span class="portal-kicker">Administrative and review workspace</span>
       <h3>Access committee and IRB functions</h3>
-      <p>Administrative accounts are created only by the System Administrator. Your assigned role opens the correct secure dashboard after login.</p>
+      <p>Administrative accounts are created by the System Administrator. Your assigned role opens the correct secure dashboard after login.</p>
       <div class="role-chips" aria-label="Administrative portal roles">
         <span>IRB Secretariat</span>
         <span>College Scientific Committee</span>
         <span>Scientific Reviewer</span>
         <span>IRB Reviewer</span>
         <span>IRB Chairperson</span>
-        <span>System Administrator</span>
       </div>
     </div>
     <form class="home-login-form admin-form" method="post" action="/login">
@@ -94,7 +97,28 @@
       <label>Institutional email<input type="email" name="email" autocomplete="username" required></label>
       <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
       <button class="btn full" type="submit">Sign in to Administrative Portal</button>
-      <p class="form-help">Authorised UCC and IRB accounts only.</p>
+      <p class="form-help">IRB Secretariat, College Scientific Committees, reviewers and IRB leadership.</p>
+    </form>
+  </div>
+
+  <div class="portal-panel system-admin-panel" id="system-admin-panel" role="tabpanel" aria-labelledby="system-admin-tab" hidden>
+    <div class="portal-panel-copy">
+      <span class="portal-kicker">Restricted system administration</span>
+      <h3>Manage portal accounts and institutional access</h3>
+      <p>This portal is reserved for authorised System Administrators. Applicants never register here. Applicants create their own accounts through the Applicant Portal.</p>
+      <ul class="feature-list">
+        <li>Create IRB Secretariat and College Scientific Committee officer accounts</li>
+        <li>Create scientific reviewer, IRB reviewer and IRB leadership accounts</li>
+        <li>Assign roles and Scientific Committee Colleges</li>
+        <li>Deactivate or reactivate administrative accounts</li>
+      </ul>
+    </div>
+    <form class="home-login-form system-admin-form" method="post" action="/system-admin/login">
+      <h3>System Administrator Login</h3>
+      <label>Administrator email<input type="email" name="email" autocomplete="username" required></label>
+      <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
+      <button class="btn red full" type="submit">Sign in as System Administrator</button>
+      <p class="form-help">Restricted system-level access. No public registration is available.</p>
     </form>
   </div>
 </section>
