@@ -48,7 +48,7 @@ app.include_router(auth.router)
 app.include_router(portal.router)
 
 
-BUILD_ID = '2026-08-09-phase2-routing-v6'
+BUILD_ID = '2026-08-09-phase2-system-admin-v7'
 
 @app.get('/healthz', include_in_schema=False)
 def healthz():
