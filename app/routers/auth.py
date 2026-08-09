@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import College, Role, User
+from ..services.routing import get_applicant_affiliations
 from ..services.auth import hash_password, verify_password
 
 router = APIRouter()
@@ -35,7 +36,7 @@ def password_error(password: str) -> str | None:
 def register_page(request: Request, db: Session = Depends(get_db)):
     if request.session.get('user_id'):
         return RedirectResponse('/dashboard', status_code=303)
-    colleges = db.scalars(select(College).where(College.active == True).order_by(College.name)).all()
+    colleges = get_applicant_affiliations(db)
     return request.app.state.templates.TemplateResponse(
         request,
         'register.html',
@@ -55,7 +56,7 @@ def register_applicant(
 ):
     full_name = full_name.strip()
     email = email.lower().strip()
-    colleges = db.scalars(select(College).where(College.active == True).order_by(College.name)).all()
+    colleges = get_applicant_affiliations(db)
 
     error = None
     if len(full_name) < 3:
