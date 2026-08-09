@@ -117,3 +117,24 @@ Uploaded documents should use a persistent disk mounted at `/app/storage` during
 ## Important production hardening still required
 
 Before institutional production use, add UCC SSO, email activation and notifications, CSRF protection, 2FA for privileged users, malware scanning, formal Alembic migrations, private object storage, automated backups, security testing, and institutional privacy/data-retention configuration.
+
+## Phase 2 V7: Dedicated System Administrator Portal
+
+The System Administrator is now separated from the normal Administrative Portal.
+
+- Applicant portal: `/login?portal=applicant`
+- Administrative portal: `/login?portal=administrative`
+- System Administrator portal: `/system-admin/login`
+- System Administrator dashboard: `/system-admin`
+
+The normal Administrative Portal accepts IRB Secretariat, College Scientific Committee Officer, College Scientific Reviewer, IRB Reviewer and IRB Chairperson accounts. A `superadmin` account is deliberately rejected there and must use the System Administrator Portal.
+
+For the first production System Administrator, configure these Render environment variables before deploying:
+
+```env
+BOOTSTRAP_ADMIN_EMAIL=your-admin-email@ucc.edu.gh
+BOOTSTRAP_ADMIN_NAME=System Administrator
+BOOTSTRAP_ADMIN_PASSWORD=<strong-initial-password>
+```
+
+The bootstrap process creates the account only when that email does not already exist. After sign-in, the System Administrator can create other authorised administrative accounts from `/system-admin`. Applicants continue to create their own accounts from `/register`.

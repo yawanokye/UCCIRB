@@ -23,6 +23,12 @@ services:
         value: "365"
       - key: MAX_UPLOAD_MB
         value: "25"
+      - key: BOOTSTRAP_ADMIN_EMAIL
+        sync: false
+      - key: BOOTSTRAP_ADMIN_NAME
+        value: System Administrator
+      - key: BOOTSTRAP_ADMIN_PASSWORD
+        sync: false
 
 databases:
   - name: ucc-irb-db
