@@ -1,0 +1,96 @@
+{% extends 'base.html' %}
+{% block title %}System Administration · UCC Ethics Portal{% endblock %}
+{% block content %}
+<div class="pagehead">
+  <div><span class="eyebrow">System Administrator</span><h1>Administrative user management</h1><p>Applicants register themselves. Only the System Administrator creates accounts for IRB and College administrative/review users.</p></div>
+</div>
+<div class="metrics">
+  <div><b>{{ users|length }}</b><span>Administrative accounts</span></div>
+  <div><b>{{ applicant_count }}</b><span>Self-registered applicants</span></div>
+  <div><b>{{ users|selectattr('active','equalto',true)|list|length }}</b><span>Active administrative users</span></div>
+</div>
+
+{% if error %}<div class="alert danger admin-alert">{{ error }}</div>{% endif %}
+{% if created_email %}
+<div class="alert success credential-alert">
+  <strong>Account created for {{ created_email }}.</strong>
+  {% if created_password and created_password != '(password set by administrator)' %}
+    Temporary password: <code>{{ created_password }}</code>. Copy it now. For security, it is not stored in readable form.
+  {% else %}
+    The password supplied by the administrator has been applied.
+  {% endif %}
+</div>
+{% endif %}
+
+<div class="admin-layout">
+  <section class="card actioncard admin-create-card">
+    <h2>Create administrative account</h2>
+    <p class="hint">Do not create applicant accounts here. Applicants use the public <strong>Create Applicant Account</strong> option.</p>
+    <form method="post" action="/admin/users">
+      <div class="formgrid">
+        <label>Officer / reviewer full name<input type="text" name="full_name" required></label>
+        <label>Email address<input type="email" name="email" required></label>
+        <label>Administrative role
+          <select name="role" id="admin-role" required>
+            <option value="irb_secretariat">IRB Secretariat</option>
+            <option value="college_admin">College Scientific Committee Officer</option>
+            <option value="college_reviewer">College Scientific Reviewer</option>
+            <option value="irb_reviewer">IRB Reviewer</option>
+            <option value="irb_chair">IRB Chairperson</option>
+            <option value="superadmin">System Administrator</option>
+          </select>
+        </label>
+        <label id="college-field">College
+          <select name="college_id">
+            <option value="">Select College</option>
+            {% for college in colleges %}<option value="{{ college.id }}">{{ college.name }}</option>{% endfor %}
+          </select>
+        </label>
+        <label class="wide">Temporary password <span class="optional">leave blank to generate automatically</span>
+          <input type="text" name="temporary_password" autocomplete="off">
+        </label>
+      </div>
+      <button class="btn" type="submit">Create Administrative Account</button>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Administrative accounts</h2>
+    <table>
+      <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>College</th><th>Status</th><th>Action</th></tr></thead>
+      <tbody>
+      {% for u in users %}
+        <tr>
+          <td>{{ u.full_name }}</td>
+          <td>{{ u.email }}</td>
+          <td>{{ u.role.replace('_',' ').title() }}</td>
+          <td>{{ u.college.name if u.college else 'University/IRB' }}</td>
+          <td><span class="status">{{ 'Active' if u.active else 'Inactive' }}</span></td>
+          <td>
+            {% if u.id != user.id %}
+            <form method="post" action="/admin/users/{{ u.id }}/toggle">
+              <button class="btn secondary smallbtn" type="submit">{{ 'Deactivate' if u.active else 'Reactivate' }}</button>
+            </form>
+            {% else %}<small>Current account</small>{% endif %}
+          </td>
+        </tr>
+      {% else %}<tr><td colspan="6" class="empty">No administrative accounts found.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+<script>
+(() => {
+  const role = document.getElementById('admin-role');
+  const collegeField = document.getElementById('college-field');
+  const update = () => {
+    const needsCollege = role.value === 'college_admin' || role.value === 'college_reviewer';
+    collegeField.style.display = needsCollege ? 'block' : 'none';
+    const select = collegeField.querySelector('select');
+    select.required = needsCollege;
+    if (!needsCollege) select.value = '';
+  };
+  role.addEventListener('change', update); update();
+})();
+</script>
+{% endblock %}

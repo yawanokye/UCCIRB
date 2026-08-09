@@ -1,0 +1,27 @@
+{% extends 'base.html' %}
+{% block title %}Create Applicant Account · UCC Ethics Portal{% endblock %}
+{% block content %}
+<div class="authcard portal-authcard registration-card">
+  <span class="eyebrow">Applicant registration</span>
+  <h1>Create your account</h1>
+  <p>Create your own applicant account. After registration, the portal will take you directly to the new ethical clearance application form.</p>
+
+  {% if error %}<div class="alert danger">{{ error }}</div>{% endif %}
+
+  <form method="post" action="/register">
+    <label>Full name<input type="text" name="full_name" autocomplete="name" required></label>
+    <label>Email address<input type="email" name="email" autocomplete="email" required></label>
+    <label>College <span class="optional">optional at registration</span>
+      <select name="college_id">
+        <option value="">Select later in your application</option>
+        {% for college in colleges %}<option value="{{ college.id }}">{{ college.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Password<input type="password" name="password" autocomplete="new-password" minlength="8" required></label>
+    <label>Confirm password<input type="password" name="confirm_password" autocomplete="new-password" minlength="8" required></label>
+    <p class="hint">Use at least 8 characters with at least one letter and one number.</p>
+    <button class="btn full" type="submit">Create Account & Start Application</button>
+  </form>
+  <div class="portal-switch"><a href="/login?portal=applicant">Already registered? Sign in</a></div>
+</div>
+{% endblock %}

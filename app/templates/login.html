@@ -1,3 +1,32 @@
-{% extends 'base.html' %}{% block title %}Sign in · UCC Ethics Portal{% endblock %}{% block content %}
-<div class="authcard"><h1>Sign in</h1><p>Access your ethical clearance workspace.</p>{% if error %}<div class="alert danger">{{ error }}</div>{% endif %}<form method="post"><label>Email<input type="email" name="email" required></label><label>Password<input type="password" name="password" required></label><button class="btn full">Sign in</button></form><div class="hint">Demo accounts are listed in the project README.</div></div>
+{% extends 'base.html' %}
+{% block title %}{% if portal == 'administrative' %}Administrative Login{% else %}Applicant Login{% endif %} · UCC Ethics Portal{% endblock %}
+{% block content %}
+<div class="authcard portal-authcard">
+  <span class="eyebrow">University of Cape Coast</span>
+  {% if portal == 'administrative' %}
+    <h1>Administrative Portal</h1>
+    <p>For IRB Secretariat, College Scientific Committees, reviewers, IRB leadership and authorised administrators.</p>
+  {% else %}
+    <h1>Applicant Login</h1>
+    <p>Access your ethical clearance applications, documents, revisions and status updates.</p>
+  {% endif %}
+
+  {% if error %}<div class="alert danger">{{ error }}</div>{% endif %}
+
+  <form method="post" action="/login">
+    <input type="hidden" name="portal" value="{{ portal }}">
+    <label>{% if portal == 'administrative' %}Institutional email{% else %}Email address{% endif %}<input type="email" name="email" autocomplete="username" required></label>
+    <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
+    <button class="btn full">{% if portal == 'administrative' %}Sign in to Administrative Portal{% else %}Sign in as Applicant{% endif %}</button>
+  </form>
+
+  <div class="portal-switch">
+    {% if portal == 'administrative' %}
+      <a href="/login?portal=applicant">Go to Applicant Login</a>
+    {% else %}
+      <a href="/register"><strong>Create Applicant Account</strong></a><br><br>
+      <a href="/login?portal=administrative">Go to Administrative Portal</a>
+    {% endif %}
+  </div>
+</div>
 {% endblock %}

@@ -11,7 +11,7 @@
   {% if user %}<div class="userbox"><span>{{ user.full_name }}</span><small>{{ user.role.replace('_',' ').title() }}</small><form method="post" action="/logout"><button class="linkbtn">Sign out</button></form></div>{% endif %}
 </header>
 {% if user %}
-<nav class="nav"><a href="/dashboard">Dashboard</a>{% if user.role == 'applicant' %}<a href="/applications/new">New application</a>{% endif %}</nav>
+<nav class="nav"><a href="/dashboard">Dashboard</a>{% if user.role == 'applicant' %}<a href="/applications/new">New application</a>{% endif %}<a href="/account/password">Change password</a></nav>
 {% endif %}
 <main class="container">{% block content %}{% endblock %}</main>
 <footer>University of Cape Coast · Research Ethics Governance Portal</footer>
