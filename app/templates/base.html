@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}UCC Ethics Portal{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><div class="crest">UCC</div><div><strong>Ethical Clearance Portal</strong><small>Institutional Review Board</small></div></div>
+  {% if user %}<div class="userbox"><span>{{ user.full_name }}</span><small>{{ user.role.replace('_',' ').title() }}</small><form method="post" action="/logout"><button class="linkbtn">Sign out</button></form></div>{% endif %}
+</header>
+{% if user %}
+<nav class="nav"><a href="/dashboard">Dashboard</a>{% if user.role == 'applicant' %}<a href="/applications/new">New application</a>{% endif %}</nav>
+{% endif %}
+<main class="container">{% block content %}{% endblock %}</main>
+<footer>University of Cape Coast · Research Ethics Governance Portal</footer>
+</body></html>

@@ -1,0 +1,4 @@
+{% extends 'base.html' %}{% block content %}
+<div class="pagehead"><div><span class="eyebrow">Applicant workspace</span><h1>My ethical clearance applications</h1></div><a class="btn" href="/applications/new">New application</a></div>
+<div class="card"><table><thead><tr><th>Reference</th><th>Research title</th><th>College</th><th>Status</th><th>Updated</th></tr></thead><tbody>{% for a in apps %}<tr><td>{{ a.reference_no or 'Draft' }}</td><td><a href="/applications/{{ a.id }}">{{ a.title }}</a></td><td>{{ a.college.name }}</td><td><span class="status">{{ a.status.replace('_',' ').title() }}</span></td><td>{{ a.updated_at.strftime('%d %b %Y') }}</td></tr>{% else %}<tr><td colspan="5" class="empty">No applications yet.</td></tr>{% endfor %}</tbody></table></div>
+{% endblock %}

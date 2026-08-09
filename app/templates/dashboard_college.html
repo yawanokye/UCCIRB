@@ -1,0 +1,4 @@
+{% extends 'base.html' %}{% block content %}
+<div class="pagehead"><div><span class="eyebrow">College Scientific Committee</span><h1>{{ user.college.name }}</h1><p>Applications are visible here after Secretariat screening. Documents remain locked until review access is granted.</p></div></div>
+<div class="card"><table><thead><tr><th>Reference</th><th>Applicant</th><th>Research title</th><th>Status</th><th>Action</th></tr></thead><tbody>{% for a in apps %}<tr><td>{{ a.reference_no }}</td><td>{{ a.applicant.full_name }}</td><td>{{ a.title }}</td><td><span class="status">{{ a.status.replace('_',' ').title() }}</span></td><td><a href="/applications/{{ a.id }}">Open record</a></td></tr>{% else %}<tr><td colspan="5" class="empty">No applications visible to this College.</td></tr>{% endfor %}</tbody></table></div>
+{% endblock %}
