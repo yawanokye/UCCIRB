@@ -114,3 +114,7 @@ STORAGE_DIR=/app/storage
 ```
 
 `postgresql://` and `postgres://` database URLs are automatically normalized to the SQLAlchemy Psycopg 3 dialect `postgresql+psycopg://`.
+
+
+## Render build verification
+After deployment, open `/healthz`. This build should report `build: 2026-08-09-template-positional-v2`. If it does not, Render is serving an older commit/build.
