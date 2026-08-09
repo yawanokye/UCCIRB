@@ -1,0 +1,19 @@
+{% extends 'base.html' %}
+{% block title %}{{ meeting.meeting_no }} · IRB Meeting{% endblock %}
+{% block content %}
+<div class="pagehead"><div><span class="eyebrow">IRB meeting</span><h1>{{ meeting.meeting_no }}</h1><p>{{ meeting.meeting_date.strftime('%d %B %Y %H:%M') }} · {{ meeting.venue or 'Venue not stated' }}</p>{% if meeting.meeting_link %}<p><a href="{{ meeting.meeting_link }}" target="_blank" rel="noopener">Open meeting link</a></p>{% endif %}</div><a class="btn secondary" href="/irb/meetings">All Meetings</a></div>
+<div class="grid2">
+<section class="card actioncard">
+  <h2>Add application to agenda</h2>
+  {% if full_board_apps %}
+  <form method="post" action="/irb/meetings/{{ meeting.id }}/add">
+    <label>Full Board application<select name="application_id" required>{% for a in full_board_apps %}<option value="{{ a.id }}">{{ a.reference_no }} · {{ a.title }}</option>{% endfor %}</select></label>
+    <label>Agenda number <span class="optional">optional</span><input name="agenda_no" placeholder="e.g. 4.2"></label>
+    <button class="btn" type="submit">Add to Agenda</button>
+  </form>
+  {% else %}<div class="alert info">There are no applications currently in Full Board status.</div>{% endif %}
+</section>
+<section class="card"><h2>Meeting details</h2><dl><dt>Status</dt><dd>{{ meeting.status.title() }}</dd><dt>Date</dt><dd>{{ meeting.meeting_date.strftime('%d %b %Y %H:%M') }}</dd><dt>Venue</dt><dd>{{ meeting.venue or '—' }}</dd><dt>Agenda items</dt><dd>{{ items|length }}</dd></dl></section>
+</div>
+<section class="card"><h2>Agenda</h2><table><thead><tr><th>Agenda</th><th>Reference</th><th>Applicant</th><th>Research title</th><th>Status</th></tr></thead><tbody>{% for item in items %}<tr><td>{{ item.agenda_no or '—' }}</td><td><a href="/applications/{{ item.application.id }}">{{ item.application.reference_no }}</a></td><td>{{ item.application.applicant.full_name }}</td><td>{{ item.application.title }}</td><td><span class="status {{ item.application.status }}">{{ item.application.status.replace('_',' ').title() }}</span></td></tr>{% else %}<tr><td colspan="5" class="empty">No applications have been added to this agenda.</td></tr>{% endfor %}</tbody></table></section>
+{% endblock %}

@@ -1,1 +1,18 @@
-{% extends 'base.html' %}{% block content %}<div class="pagehead"><div><span class="eyebrow">Reviewer workspace</span><h1>Assigned reviews</h1></div></div><div class="card"><table><thead><tr><th>Reference</th><th>Title</th><th>Role</th><th>Status</th></tr></thead><tbody>{% for x in assignments %}<tr><td><a href="/applications/{{ x.application.id }}">{{ x.application.reference_no }}</a></td><td>{{ x.application.title }}</td><td>{{ x.assignment_type.title() }}</td><td>{{ x.status.title() }}</td></tr>{% else %}<tr><td colspan="4" class="empty">No reviews assigned.</td></tr>{% endfor %}</tbody></table></div>{% endblock %}
+{% extends 'base.html' %}
+{% block title %}Reviewer Workspace · UCC Ethics Portal{% endblock %}
+{% block content %}
+<div class="pagehead"><div><span class="eyebrow">Reviewer workspace</span><h1>Assigned reviews</h1><p>Declare conflicts before document access. Due dates and overdue assignments are shown below.</p></div></div>
+<div class="card"><table><thead><tr><th>Reference</th><th>Title</th><th>Review level</th><th>Role</th><th>Due</th><th>Conflict declaration</th><th>Status</th></tr></thead><tbody>
+{% for x in assignments %}
+<tr>
+  <td><a href="/applications/{{ x.application.id }}">{{ x.application.reference_no }}</a></td>
+  <td>{{ x.application.title }}</td>
+  <td>{{ x.level.replace('_',' ').title() }}</td>
+  <td>{{ x.assignment_type.title() }}</td>
+  <td>{% if meta.get(x.id) and meta[x.id].due_at %}{{ meta[x.id].due_at.strftime('%d %b %Y') }}{% if meta[x.id].due_at < now and x.status not in ['completed','declined'] %}<br><span class="overdue">Overdue</span>{% endif %}{% else %}—{% endif %}</td>
+  <td>{% if declarations.get(x.id) %}{{ declarations[x.id].declaration.title() }}{% else %}<span class="urgent">Required</span>{% endif %}</td>
+  <td><span class="status">{{ x.status.title() }}</span></td>
+</tr>
+{% else %}<tr><td colspan="7" class="empty">No reviews assigned.</td></tr>{% endfor %}
+</tbody></table></div>
+{% endblock %}

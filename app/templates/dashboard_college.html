@@ -1,4 +1,12 @@
-{% extends 'base.html' %}{% block content %}
-<div class="pagehead"><div><span class="eyebrow">College Scientific Committee</span><h1>{{ user.college.name }}</h1><p>Applications are visible here after Secretariat screening. Documents remain locked until review access is granted.</p></div></div>
-<div class="card"><table><thead><tr><th>Reference</th><th>Applicant</th><th>Research title</th><th>Status</th><th>Action</th></tr></thead><tbody>{% for a in apps %}<tr><td>{{ a.reference_no }}</td><td>{{ a.applicant.full_name }}</td><td>{{ a.title }}</td><td><span class="status">{{ a.status.replace('_',' ').title() }}</span></td><td><a href="/applications/{{ a.id }}">Open record</a></td></tr>{% else %}<tr><td colspan="5" class="empty">No applications visible to this College.</td></tr>{% endfor %}</tbody></table></div>
+{% extends 'base.html' %}
+{% block title %}College Scientific Committee · UCC Ethics Portal{% endblock %}
+{% block content %}
+<div class="pagehead"><div><span class="eyebrow">College Scientific Committee</span><h1>{{ user.college.name }}</h1><p>Applications become visible after Secretariat screening. Research documents remain locked until the Secretariat grants review authority.</p></div></div>
+<div class="metrics">
+  <div><b>{{ apps|length }}</b><span>Visible applications</span></div>
+  <div><b>{{ apps|selectattr('status','equalto','visible_to_college')|list|length }}</b><span>Available to request</span></div>
+  <div><b>{{ apps|selectattr('status','equalto','under_college_scientific_review')|list|length }}</b><span>Under scientific review</span></div>
+  <div><b>{{ apps|selectattr('status','equalto','awaiting_college_decision')|list|length }}</b><span>Awaiting committee decision</span></div>
+</div>
+<div class="card"><table><thead><tr><th>Reference</th><th>Applicant</th><th>Research title</th><th>Status</th><th>Action</th></tr></thead><tbody>{% for a in apps %}<tr><td>{{ a.reference_no }}</td><td>{{ a.applicant.full_name }}</td><td>{{ a.title }}</td><td><span class="status {{ a.status }}">{{ a.status.replace('_',' ').title() }}</span></td><td><a href="/applications/{{ a.id }}">Open record</a></td></tr>{% else %}<tr><td colspan="5" class="empty">No applications are currently visible to this College.</td></tr>{% endfor %}</tbody></table></div>
 {% endblock %}

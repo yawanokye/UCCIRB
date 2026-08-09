@@ -1,12 +1,341 @@
-{% extends 'base.html' %}{% block content %}
-<div class="pagehead"><div><span class="eyebrow">{{ app.reference_no or 'Draft application' }}</span><h1>{{ app.title }}</h1><p>{{ app.applicant.full_name }} · {{ app.college.name }} · {{ app.department or 'Department not stated' }}</p></div><span class="status big">{{ app.status.replace('_',' ').title() }}</span></div>
-<div class="grid2"><section class="card"><h2>Application record</h2><dl><dt>Applicant type</dt><dd>{{ app.applicant_type }}</dd><dt>Programme</dt><dd>{{ app.programme or '—' }}</dd><dt>Study summary</dt><dd>{{ app.study_summary or '—' }}</dd><dt>Submitted</dt><dd>{{ app.submitted_at.strftime('%d %b %Y %H:%M') if app.submitted_at else 'Not submitted' }}</dd></dl></section><section class="card"><h2>Access state</h2>{% if can_docs %}<div class="access granted">Document access active for your role.</div>{% else %}<div class="access locked">Research documents are locked. Only application metadata is visible.</div>{% endif %}</section></div>
+{% extends 'base.html' %}
+{% block title %}{{ app.reference_no or 'Draft' }} · UCC Ethics Portal{% endblock %}
+{% block content %}
+<div class="pagehead">
+  <div>
+    <span class="eyebrow">{{ app.reference_no or 'Draft application' }}</span>
+    <h1>{{ app.title }}</h1>
+    <p>{{ app.applicant.full_name }} · {% if is_direct_irb %}{{ app.department or 'Other UCC academic/administrative unit' }}{% else %}{{ app.college.name }} · {{ app.department or 'Department not stated' }}{% endif %}</p>
+  </div>
+  <span class="status big {{ app.status }}">{{ app.status.replace('_',' ').title() }}</span>
+</div>
+
+<div class="grid2">
+  <section class="card">
+    <h2>Application record</h2>
+    <dl>
+      <dt>Applicant type</dt><dd>{{ app.applicant_type }}</dd>
+      <dt>Programme</dt><dd>{{ app.programme or '—' }}</dd>
+      <dt>{% if is_direct_irb %}UCC Unit{% else %}Department{% endif %}</dt><dd>{{ app.department or '—' }}</dd>
+      <dt>Review pathway</dt><dd>{% if uses_college_scientific_review %}{{ app.college.name }} Scientific Committee → IRB{% else %}Direct IRB Secretariat pathway{% endif %}</dd>
+      <dt>Study summary</dt><dd>{{ app.study_summary or '—' }}</dd>
+      <dt>Submitted</dt><dd>{{ app.submitted_at.strftime('%d %b %Y %H:%M') if app.submitted_at else 'Not submitted' }}</dd>
+    </dl>
+  </section>
+  <section class="card">
+    <h2>Access and routing</h2>
+    {% if is_direct_irb %}
+      <div class="route-state direct"><strong>Direct IRB Secretariat pathway.</strong> This application does not require a College Scientific Committee review.</div>
+    {% elif uses_college_scientific_review %}
+      <div class="route-state college"><strong>College Scientific Committee pathway.</strong> College documents are activated only after Secretariat approval.</div>
+    {% endif %}
+    {% if can_docs %}
+      <div class="access granted">Document access is active for your role.</div>
+    {% else %}
+      <div class="access locked">Research documents are locked. Only authorised metadata is visible.</div>
+    {% endif %}
+    {% if classifications %}
+      <p class="hint"><strong>Latest IRB classification:</strong> {{ classifications[0].classification.replace('_',' ').title() }}</p>
+    {% endif %}
+  </section>
+</div>
+
 {% if user.id == app.applicant_id and app.status in ['draft','returned_to_applicant_admin','college_revision_required','irb_revision_required'] %}
-<section class="card"><h2>Upload supporting documents</h2><form method="post" action="/applications/{{ app.id }}/documents" enctype="multipart/form-data" class="inlineform"><select name="document_type"><option>Research Protocol</option><option>Data Collection Instrument</option><option>Supervisor Approval</option><option>Participant Information Sheet</option><option>Consent Form</option><option>Other Supporting Document</option></select><input type="file" name="file" required><button class="btn secondary">Upload</button></form>{% if app.status in ['draft','returned_to_applicant_admin'] %}<form method="post" action="/applications/{{ app.id }}/submit" class="submitbox"><button class="btn">Submit to IRB Secretariat</button><small>Student submissions require Research Protocol, Data Collection Instrument and Supervisor Approval.</small></form>{% endif %}</section>{% endif %}
-{% if can_docs %}<section class="card"><h2>Documents</h2><table><thead><tr><th>Type</th><th>File</th><th>Version</th><th>Uploaded</th></tr></thead><tbody>{% for d in documents %}<tr><td>{{ d.document_type }}</td><td><a href="/documents/{{ d.id }}/download">{{ d.original_name }}</a></td><td>v{{ d.version }}</td><td>{{ d.uploaded_at.strftime('%d %b %Y %H:%M') }}</td></tr>{% else %}<tr><td colspan="4" class="empty">No documents uploaded.</td></tr>{% endfor %}</tbody></table></section>{% endif %}
-{% if user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status in ['submitted_to_irb_secretariat','irb_secretariat_screening'] %}<section class="card actioncard"><h2>Secretariat administrative screening</h2><form method="post" action="/secretariat/{{ app.id }}/screen"><textarea name="note" rows="3" placeholder="Screening note"></textarea><div class="actions"><button class="btn" name="outcome" value="complete">Mark administratively complete</button><button class="btn dangerbtn" name="outcome" value="return">Return to applicant</button></div></form></section>{% endif %}
-{% if user.role == 'college_admin' and app.status == 'visible_to_college' %}<section class="card actioncard"><h2>Request authority to commence scientific review</h2><p>The application is visible to your College, but the substantive documents remain locked.</p><form method="post" action="/college/{{ app.id }}/request-access"><textarea name="note" rows="3" placeholder="Optional note to IRB Secretariat"></textarea><button class="btn">Request Review Access</button></form></section>{% endif %}
-{% if user.role in ['irb_secretariat','irb_chair','superadmin'] %}{% for r in access_requests %}{% if r.status == 'pending' %}<section class="card actioncard"><h2>College access request</h2><p>Requested {{ r.requested_at.strftime('%d %b %Y %H:%M') }}. {{ r.request_note or '' }}</p><form method="post" action="/secretariat/access/{{ r.id }}/decide"><textarea name="note" rows="3" placeholder="Decision note"></textarea><div class="actions"><button class="btn" name="decision" value="grant">Grant & Activate Documents</button><button class="btn dangerbtn" name="decision" value="withhold">Withhold Access</button></div></form></section>{% endif %}{% endfor %}{% endif %}
-{% if user.role == 'college_admin' and app.status in ['awaiting_college_reviewer_assignment','under_college_scientific_review'] %}<section class="card actioncard"><h2>Assign College scientific reviewer</h2><form method="post" action="/college/{{ app.id }}/assign-reviewer" class="inlineform"><select name="reviewer_id" required>{% for r in reviewers %}<option value="{{ r.id }}">{{ r.full_name }}</option>{% endfor %}</select><select name="assignment_type"><option value="primary">Primary</option><option value="secondary">Secondary</option><option value="specialist">Specialist</option></select><button class="btn">Assign reviewer</button></form></section>{% endif %}
-{% for x in assignments %}{% if x.reviewer_id == user.id and x.status != 'completed' %}<section class="card actioncard"><h2>Submit scientific review</h2><form method="post" action="/review/{{ x.id }}/submit"><label>Recommendation<select name="recommendation"><option>Scientifically Recommended</option><option>Minor Revision Required</option><option>Major Revision Required</option><option>Specialist Review Required</option><option>Not Scientifically Recommended</option></select></label><label>Comments<textarea name="comments" rows="7" required></textarea></label><button class="btn">Submit review</button></form></section>{% endif %}{% endfor %}
+<section class="card actioncard">
+  <h2>{% if app.status in ['college_revision_required','irb_revision_required'] %}Upload revised documents{% else %}Upload supporting documents{% endif %}</h2>
+  {% if app.status == 'returned_to_applicant_admin' and app.secretariat_note %}<div class="alert warning"><strong>Secretariat request:</strong> {{ app.secretariat_note }}</div>{% endif %}
+  <form method="post" action="/applications/{{ app.id }}/documents" enctype="multipart/form-data" class="inlineform">
+    <select name="document_type" required>
+      <option>Research Protocol</option>
+      <option>Data Collection Instrument</option>
+      <option>Supervisor Approval</option>
+      <option>Participant Information Sheet</option>
+      <option>Consent Form</option>
+      <option>Assent Form</option>
+      <option>Recruitment Material</option>
+      <option>Data Management Plan</option>
+      <option>Response to College Review</option>
+      <option>Response to IRB Review</option>
+      <option>Tracked Changes Protocol</option>
+      <option>Other Supporting Document</option>
+    </select>
+    <input type="file" name="file" required>
+    <button class="btn secondary" type="submit">Upload</button>
+  </form>
+  {% if app.status in ['draft','returned_to_applicant_admin'] %}
+    <form method="post" action="/applications/{{ app.id }}/submit" class="submitbox">
+      <button class="btn" type="submit">Submit to IRB Secretariat</button>
+      <small>Student applications require Research Protocol, Data Collection Instrument and Supervisor Approval.</small>
+    </form>
+  {% else %}
+    <form method="post" action="/applications/{{ app.id }}/submit-revision" class="submitbox">
+      <button class="btn red" type="submit">Submit Revised Application</button>
+      <small>{% if app.status == 'college_revision_required' %}Upload a Response to College Review before submitting.{% else %}Upload a Response to IRB Review before submitting.{% endif %}</small>
+    </form>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if can_docs %}
+<section class="card">
+  <h2>Application documents</h2>
+  <table>
+    <thead><tr><th>Document type</th><th>File</th><th>Version</th><th>Uploaded</th></tr></thead>
+    <tbody>
+    {% for d in documents %}
+      <tr><td>{{ d.document_type }}</td><td><a href="/documents/{{ d.id }}/download">{{ d.original_name }}</a></td><td>v{{ d.version }}</td><td>{{ d.uploaded_at.strftime('%d %b %Y %H:%M') }}</td></tr>
+    {% else %}<tr><td colspan="4" class="empty">No documents are available.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status in ['submitted_to_irb_secretariat','irb_secretariat_screening'] %}
+<section class="card actioncard navyline">
+  <h2>IRB Secretariat administrative screening</h2>
+  {% if uses_college_scientific_review %}
+    <p>Confirm administrative completeness. If complete, the application becomes visible to {{ app.college.name }} for a controlled request to commence scientific review. Documents remain locked until the Secretariat grants access.</p>
+  {% else %}
+    <p>Confirm administrative completeness. This applicant is from a UCC unit outside the five Scientific Committee Colleges, so a complete application will remain with the Secretariat and proceed directly to IRB review classification.</p>
+  {% endif %}
+  <form method="post" action="/secretariat/{{ app.id }}/screen">
+    <label>Screening note<textarea name="note" rows="3" placeholder="Record missing items, clarification or screening note"></textarea></label>
+    <div class="actions"><button class="btn" name="outcome" value="complete">Mark Administratively Complete</button><button class="btn dangerbtn" name="outcome" value="return">Return to Applicant</button></div>
+  </form>
+</section>
+{% endif %}
+
+{% if user.role == 'college_admin' and app.status == 'visible_to_college' %}
+<section class="card actioncard">
+  <h2>Request authority to commence scientific review</h2>
+  <p>The application record is visible to your College, but the substantive documents remain locked until the IRB Secretariat activates access.</p>
+  <form method="post" action="/college/{{ app.id }}/request-access"><label>Optional note<textarea name="note" rows="3"></textarea></label><button class="btn" type="submit">Request Review Access</button></form>
+</section>
+{% endif %}
+
+{% if user.role in ['irb_secretariat','irb_chair','superadmin'] %}
+  {% for r in access_requests %}{% if r.status == 'pending' %}
+  <section class="card actioncard redline">
+    <h2>College review access request</h2>
+    <p>Requested {{ r.requested_at.strftime('%d %b %Y %H:%M') }}. {{ r.request_note or '' }}</p>
+    <form method="post" action="/secretariat/access/{{ r.id }}/decide">
+      <label>Decision note<textarea name="note" rows="3"></textarea></label>
+      <div class="actions"><button class="btn" name="decision" value="grant">Grant & Activate Documents</button><button class="btn dangerbtn" name="decision" value="withhold">Withhold Access</button></div>
+    </form>
+  </section>
+  {% endif %}{% endfor %}
+{% endif %}
+
+{% if user.role == 'college_admin' and app.status in ['awaiting_college_reviewer_assignment','under_college_scientific_review','college_revised_submission_received'] %}
+<section class="card actioncard">
+  <h2>Assign College scientific reviewer</h2>
+  {% if college_reviewers %}
+  <form method="post" action="/college/{{ app.id }}/assign-reviewer" class="inlineform four">
+    <select name="reviewer_id" required>
+      {% for r in college_reviewers %}<option value="{{ r.id }}">{{ r.full_name }} · {{ reviewer_workload[r.id].active }} active / {{ reviewer_workload[r.id].completed }} completed{% if reviewer_workload[r.id].overdue %} / {{ reviewer_workload[r.id].overdue }} overdue{% endif %}</option>{% endfor %}
+    </select>
+    <select name="assignment_type"><option value="primary">Primary</option><option value="secondary">Secondary</option><option value="specialist">Specialist</option></select>
+    <input type="number" min="1" max="90" name="due_days" value="{{ default_due_days }}" aria-label="Review due days">
+    <button class="btn" type="submit">Assign Reviewer</button>
+  </form>
+  {% else %}<div class="alert warning">No active College scientific reviewer account is assigned to this College.</div>{% endif %}
+</section>
+{% endif %}
+
+{% for x in assignments %}
+  {% if x.reviewer_id == user.id and x.status in ['assigned','accepted'] %}
+    {% set declaration = declarations.get(x.id) %}
+    {% if not declaration %}
+    <section class="card actioncard redline">
+      <h2>Conflict-of-interest declaration</h2>
+      <p>Before accessing the full research documents, declare whether you have a conflict of interest with this review.</p>
+      <form method="post" action="/review/{{ x.id }}/declaration">
+        <label>Declaration<select name="declaration" required><option value="clear">I have no conflict of interest</option><option value="conflict">I have a potential conflict and must decline</option></select></label>
+        <label>Optional note<textarea name="note" rows="3"></textarea></label>
+        <button class="btn" type="submit">Submit Declaration</button>
+      </form>
+    </section>
+    {% elif declaration.declaration == 'clear' %}
+    <section class="card actioncard navyline">
+      <h2>{% if x.level == 'college' %}Submit scientific review{% else %}Submit IRB ethical review{% endif %}</h2>
+      {% if assignment_meta.get(x.id) and assignment_meta[x.id].due_at %}<p class="hint">Review due: <strong>{{ assignment_meta[x.id].due_at.strftime('%d %b %Y %H:%M') }}</strong>{% if assignment_meta[x.id].due_at < now %} <span class="overdue">Overdue</span>{% endif %}</p>{% endif %}
+      <form method="post" action="/review/{{ x.id }}/submit">
+        <label>Recommendation
+          <select name="recommendation" required>
+            {% if x.level == 'college' %}
+              <option value="scientifically_recommended">Scientifically Recommended</option>
+              <option value="minor_revision">Minor Revision Required</option>
+              <option value="major_revision">Major Revision Required</option>
+              <option value="specialist_review">Specialist Review Required</option>
+              <option value="not_recommended">Not Scientifically Recommended</option>
+            {% else %}
+              <option value="approve">Recommend Approval</option>
+              <option value="approve_conditions">Recommend Approval with Conditions</option>
+              <option value="minor_revision">Minor Revision Required</option>
+              <option value="major_revision">Major Revision Required</option>
+              <option value="full_board">Refer to Full Board</option>
+              <option value="reject">Recommend Rejection</option>
+            {% endif %}
+          </select>
+        </label>
+        <label>Review comments<textarea name="comments" rows="8" required placeholder="Provide clear, numbered and actionable comments."></textarea></label>
+        <button class="btn" type="submit">Submit Review</button>
+      </form>
+    </section>
+    {% endif %}
+  {% endif %}
+{% endfor %}
+
+{% if assignments %}
+<section class="card">
+  <h2>Reviewer assignments and reports</h2>
+  {% for x in assignments %}
+  <div class="review-box">
+    <h4>{{ x.level.replace('_',' ').title() }} · {{ x.assignment_type.title() }} reviewer</h4>
+    <div class="review-meta"><span>{{ x.reviewer.full_name }}</span><span>Assigned {{ x.assigned_at.strftime('%d %b %Y') }}</span><span class="chip">{{ x.status.title() }}</span>{% if assignment_meta.get(x.id) and assignment_meta[x.id].due_at %}<span>Due {{ assignment_meta[x.id].due_at.strftime('%d %b %Y') }}</span>{% endif %}</div>
+    {% if x.recommendation %}<p><strong>Recommendation:</strong> {{ x.recommendation.replace('_',' ').title() }}</p>{% endif %}
+    {% if x.comments %}<div class="review-comments">{{ x.comments }}</div>{% endif %}
+    {% if declarations.get(x.id) and declarations[x.id].declaration == 'conflict' %}<div class="alert danger">Reviewer declared a conflict of interest and declined this assignment.</div>{% endif %}
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if user.role == 'college_admin' and app.status == 'awaiting_college_decision' %}
+<section class="card actioncard">
+  <h2>College Scientific Committee decision</h2>
+  <form method="post" action="/college/{{ app.id }}/decision">
+    <div class="formgrid">
+      <label>Committee decision<select name="decision" required><option value="recommend">Scientifically Recommend to IRB</option><option value="minor_revision">Minor Revision Required</option><option value="major_revision">Major Revision Required</option><option value="specialist_review">Specialist Review Required</option><option value="not_recommended">Not Scientifically Recommended</option></select></label>
+      <label>Meeting/reference number<input name="meeting_reference" placeholder="e.g. CBE-CSC/2026/08"></label>
+      <label class="wide">Committee comments<textarea name="comments" rows="5" placeholder="Record the formal College Scientific Committee decision and any applicant-facing corrections."></textarea></label>
+    </div>
+    <button class="btn" type="submit">Record College Decision</button>
+  </form>
+</section>
+{% endif %}
+
+{% if college_decisions %}
+<section class="card">
+  <h2>College Scientific Committee decisions</h2>
+  <table><thead><tr><th>Date</th><th>Decision</th><th>Meeting/reference</th><th>Comments</th></tr></thead><tbody>{% for d in college_decisions %}<tr><td>{{ d.decided_at.strftime('%d %b %Y') }}</td><td>{{ d.decision.replace('_',' ').title() }}</td><td>{{ d.meeting_reference or '—' }}</td><td>{{ d.comments or '—' }}</td></tr>{% endfor %}</tbody></table>
+</section>
+{% endif %}
+
+{% if user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status in ['returned_to_irb_secretariat','direct_irb_secretariat_pathway','irb_review_classification'] %}
+{% if is_direct_irb and app.status == 'direct_irb_secretariat_pathway' %}<div class="alert info direct-path-alert"><strong>No College Scientific Committee applies.</strong> The Secretariat can now classify this application for IRB ethical review.</div>{% endif %}
+<section class="card actioncard navyline">
+  <h2>IRB review classification</h2>
+  <form method="post" action="/irb/{{ app.id }}/classify">
+    <label>Review pathway<select name="classification" required><option value="exempt">Exempt Determination</option><option value="expedited">Expedited Review</option><option value="full_board">Full Board Review</option></select></label>
+    <label>Classification rationale<textarea name="rationale" rows="4" placeholder="Record the basis for the selected review pathway."></textarea></label>
+    <button class="btn" type="submit">Confirm Classification</button>
+  </form>
+</section>
+{% endif %}
+
+{% if classifications %}
+<section class="card">
+  <h2>IRB classifications</h2>
+  <table><thead><tr><th>Date</th><th>Classification</th><th>Rationale</th></tr></thead><tbody>{% for c in classifications %}<tr><td>{{ c.classified_at.strftime('%d %b %Y') }}</td><td>{{ c.classification.replace('_',' ').title() }}</td><td>{{ c.rationale or '—' }}</td></tr>{% endfor %}</tbody></table>
+</section>
+{% endif %}
+
+{% if user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status in ['awaiting_irb_reviewer_assignment','under_irb_ethical_review','irb_revised_submission_received'] %}
+<section class="card actioncard navyline">
+  <h2>Assign IRB ethical reviewer</h2>
+  {% if irb_reviewers %}
+  <form method="post" action="/irb/{{ app.id }}/assign-reviewer" class="inlineform four">
+    <select name="reviewer_id" required>{% for r in irb_reviewers %}<option value="{{ r.id }}">{{ r.full_name }} · {{ reviewer_workload[r.id].active }} active / {{ reviewer_workload[r.id].completed }} completed{% if reviewer_workload[r.id].overdue %} / {{ reviewer_workload[r.id].overdue }} overdue{% endif %}</option>{% endfor %}</select>
+    <select name="assignment_type"><option value="primary">Primary</option><option value="secondary">Secondary</option><option value="specialist">Specialist</option></select>
+    <input type="number" name="due_days" min="1" max="90" value="{{ default_due_days }}" aria-label="Review due days">
+    <button class="btn" type="submit">Assign IRB Reviewer</button>
+  </form>
+  {% else %}<div class="alert warning">No active IRB Reviewer account has been created. Ask the System Administrator to create one.</div>{% endif %}
+</section>
+{% endif %}
+
+{% if app.status == 'scheduled_for_full_board_review' and user.role in ['irb_secretariat','irb_chair','superadmin'] %}
+<section class="card actioncard redline">
+  <h2>Full Board consideration</h2>
+  {% if meeting_items %}
+    <p>This application is currently listed on:</p>
+    <ul>{% for item in meeting_items %}<li><a href="/irb/meetings/{{ item.meeting.id }}">{{ item.meeting.meeting_no }}</a> · {{ item.meeting.meeting_date.strftime('%d %b %Y %H:%M') }}{% if item.agenda_no %} · Agenda {{ item.agenda_no }}{% endif %}</li>{% endfor %}</ul>
+  {% else %}<div class="alert warning">The application requires Full Board review but has not yet been placed on an IRB meeting agenda. <a href="/irb/meetings">Schedule it from IRB Meetings</a>.</div>{% endif %}
+</section>
+{% endif %}
+
+{% if user.role in ['irb_chair','superadmin'] and app.status in ['awaiting_final_irb_decision','scheduled_for_full_board_review','deferred'] %}
+<section class="card actioncard redline">
+  <h2>Authorised final IRB decision</h2>
+  <p>The final decision is restricted to the IRB Chairperson or an authorised system-level authority.</p>
+  <form method="post" action="/irb/{{ app.id }}/decision">
+    <div class="formgrid">
+      <label>Decision<select name="decision" required><option value="approved">Approved</option><option value="approved_conditions">Approved with Conditions</option><option value="deferred">Deferred</option><option value="rejected">Rejected</option></select></label>
+      <label>IRB meeting {% if app.status == 'scheduled_for_full_board_review' %}<span class="urgent">required</span>{% else %}<span class="optional">optional</span>{% endif %}<select name="meeting_id"><option value="">No meeting / Chair determination</option>{% for m in meetings %}<option value="{{ m.id }}">{{ m.meeting_no }} · {{ m.meeting_date.strftime('%d %b %Y') }}</option>{% endfor %}</select></label>
+      <label class="wide">Conditions / decision reasons<textarea name="conditions" rows="5" placeholder="Record approval conditions, reasons for deferral, or reasons for rejection."></textarea></label>
+    </div>
+    <button class="btn red" type="submit">Record Final IRB Decision</button>
+  </form>
+</section>
+{% endif %}
+
+{% if irb_decisions %}
+<section class="card">
+  <h2>IRB decisions</h2>
+  <table><thead><tr><th>Date</th><th>Decision</th><th>Conditions/reasons</th><th>Meeting</th></tr></thead><tbody>{% for d in irb_decisions %}<tr><td>{{ d.decided_at.strftime('%d %b %Y') }}</td><td>{{ d.decision.replace('_',' ').title() }}</td><td>{{ d.conditions or '—' }}</td><td>{{ d.meeting.meeting_no if d.meeting else '—' }}</td></tr>{% endfor %}</tbody></table>
+</section>
+{% endif %}
+
+{% if certificates %}
+<section class="card">
+  <h2>Ethical clearance certificates</h2>
+  <table><thead><tr><th>Certificate</th><th>Issued</th><th>Expiry</th><th>Status</th><th></th></tr></thead><tbody>{% for c in certificates %}<tr><td>{{ c.certificate_no }}</td><td>{{ c.issue_date.strftime('%d %b %Y') }}</td><td>{{ c.expiry_date.strftime('%d %b %Y') }}</td><td><span class="status {{ c.status }}">{{ c.status.title() }}</span></td><td><a class="btn secondary smallbtn" href="/certificates/{{ c.id }}/download">Download PDF</a></td></tr>{% endfor %}</tbody></table>
+</section>
+{% endif %}
+
+{% if user.id == app.applicant_id and app.status in ['active_study','ethical_clearance_issued'] %}
+<section class="card actioncard">
+  <h2>Post-approval action</h2>
+  <p>Use this module for changes or events after ethical clearance has been issued.</p>
+  <form method="post" action="/applications/{{ app.id }}/post-approval" enctype="multipart/form-data">
+    <div class="formgrid">
+      <label>Request type<select name="request_type" required><option value="amendment">Protocol Amendment</option><option value="renewal">Renewal / Continuing Review</option><option value="adverse_event">Adverse Event / Protocol Deviation</option><option value="closure">Study Closure</option></select></label>
+      <label>Supporting document <span class="optional">optional</span><input type="file" name="file"></label>
+      <label class="wide">Request details<textarea name="summary" rows="6" required placeholder="Describe the amendment, continuing review, adverse event or closure request in sufficient detail."></textarea></label>
+    </div>
+    <button class="btn" type="submit">Submit Post-Approval Request</button>
+  </form>
+</section>
+{% endif %}
+
+{% if post_requests %}
+<section class="card">
+  <h2>Post-approval requests</h2>
+  {% for p in post_requests %}
+  <div class="review-box">
+    <h4>{{ p.request_type.replace('_',' ').title() }} <span class="chip">{{ p.status.title() }}</span></h4>
+    <div class="review-meta"><span>Submitted {{ p.submitted_at.strftime('%d %b %Y %H:%M') }}</span></div>
+    <div class="review-comments">{{ p.summary }}</div>
+    {% if p.supporting_document_id and can_docs %}<p><a href="/documents/{{ p.supporting_document_id }}/download">Download supporting document</a></p>{% endif %}
+    {% if p.decision_note %}<p><strong>Decision note:</strong> {{ p.decision_note }}</p>{% endif %}
+    {% if p.status == 'pending' and user.role in ['irb_secretariat','irb_chair','superadmin'] %}
+      <form method="post" action="/post-approval/{{ p.id }}/decide">
+        <label>Decision note<textarea name="note" rows="3"></textarea></label>
+        <div class="actions"><button class="btn" name="decision" value="approve">Approve</button><button class="btn secondary" name="decision" value="return">Return</button><button class="btn dangerbtn" name="decision" value="reject">Reject</button></div>
+      </form>
+    {% endif %}
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if status_history %}
+<section class="card">
+  <h2>Application workflow history</h2>
+  <ol class="timeline">
+    {% for h in status_history %}<li><strong>{{ h.to_status.replace('_',' ').title() }}</strong><small>{{ h.created_at.strftime('%d %b %Y %H:%M') }}</small>{% if h.note %}<div>{{ h.note }}</div>{% endif %}</li>{% endfor %}
+  </ol>
+</section>
+{% endif %}
 {% endblock %}

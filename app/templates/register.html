@@ -11,11 +11,12 @@
   <form method="post" action="/register">
     <label>Full name<input type="text" name="full_name" autocomplete="name" required></label>
     <label>Email address<input type="email" name="email" autocomplete="email" required></label>
-    <label>College <span class="optional">optional at registration</span>
+    <label>Primary UCC affiliation <span class="optional">optional at registration</span>
       <select name="college_id">
         <option value="">Select later in your application</option>
         {% for college in colleges %}<option value="{{ college.id }}">{{ college.name }}</option>{% endfor %}
       </select>
+      <span class="form-help">Only five Colleges have Scientific Committees. Applicants from other UCC units can select the direct IRB Secretariat option.</span>
     </label>
     <label>Password<input type="password" name="password" autocomplete="new-password" minlength="8" required></label>
     <label>Confirm password<input type="password" name="confirm_password" autocomplete="new-password" minlength="8" required></label>

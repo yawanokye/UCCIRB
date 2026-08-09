@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+{% block title %}Verify Ethical Clearance · UCC{% endblock %}
+{% block content %}
+<div class="verification-shell">
+  <span class="eyebrow">Public certificate verification</span>
+  <h1>UCC Ethical Clearance Verification</h1>
+  {% if certificate %}
+    <div class="verification-banner {% if display_status not in ['valid'] %}invalid{% endif %}"><div><h2>{{ display_status.upper() }}</h2><p>Certificate {{ certificate.certificate_no }}</p></div><span class="status {{ display_status }}">{{ display_status.title() }}</span></div>
+    <section class="card" style="margin-top:20px"><h2>Verified approval record</h2><dl><dt>Certificate number</dt><dd>{{ certificate.certificate_no }}</dd><dt>Protocol number</dt><dd>{{ certificate.application.reference_no }}</dd><dt>Researcher</dt><dd>{{ certificate.application.applicant.full_name }}</dd><dt>Research title</dt><dd>{{ certificate.application.title }}</dd><dt>Approval date</dt><dd>{{ certificate.issue_date.strftime('%d %B %Y') }}</dd><dt>Expiry date</dt><dd>{{ certificate.expiry_date.strftime('%d %B %Y') }}</dd></dl><p class="hint">Only limited non-sensitive information is displayed on this public verification page.</p></section>
+  {% else %}
+    <div class="verification-banner invalid"><div><h2>NOT FOUND</h2><p>No ethical clearance certificate matches this verification token.</p></div></div>
+  {% endif %}
+</div>
+{% endblock %}

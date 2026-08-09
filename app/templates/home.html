@@ -2,9 +2,34 @@
 {% block title %}UCC Ethical Clearance Portal{% endblock %}
 {% block content %}
 <section class="hero portal-hero">
-  <span class="eyebrow">University of Cape Coast</span>
+  <span class="eyebrow">University of Cape Coast · Institutional Review Board</span>
   <h1>Ethical Clearance Application and Review Portal</h1>
-  <p>All applications are received centrally by the IRB Secretariat and managed through the appropriate College Scientific Committee before final IRB ethical review and decision.</p>
+  <p>All applications are received centrally by the IRB Secretariat. Applications from the five Colleges with Scientific Committees follow controlled College scientific review, while applications from other UCC academic and administrative units remain with the IRB Secretariat for direct IRB processing.</p>
+</section>
+
+<section class="route-notice card">
+  <div class="route-notice-head">
+    <div><span class="eyebrow">Application routing</span><h2>One submission point, two review pathways</h2></div>
+    <span class="route-badge">IRB Secretariat receives all submissions</span>
+  </div>
+  <div class="routing-grid">
+    <div class="route-panel college-route">
+      <h3>College Scientific Committee pathway</h3>
+      <p>These five Colleges have Scientific Committees. After Secretariat screening, the College sees the application, requests access and begins review only after the Secretariat activates the documents.</p>
+      <ul>
+        <li>College of Agriculture and Natural Sciences</li>
+        <li>College of Distance Education</li>
+        <li>College of Education Studies</li>
+        <li>College of Humanities and Legal Studies</li>
+        <li>College of Health and Allied Sciences</li>
+      </ul>
+    </div>
+    <div class="route-panel direct-route">
+      <h3>Direct IRB Secretariat pathway</h3>
+      <p>Applicants from UCC academic or administrative units outside the five Colleges do not pass through a College Scientific Committee. After administrative screening, the Secretariat retains the application and moves it directly to IRB review classification.</p>
+      <span class="route-flow">Secretariat screening → IRB classification → Ethical review → IRB decision</span>
+    </div>
+  </div>
 </section>
 
 <section class="login-shell" aria-labelledby="portal-access-title">
@@ -31,7 +56,7 @@
     <div class="portal-panel-copy">
       <span class="portal-kicker">Applicant workspace</span>
       <h3>Submit and track your ethical clearance application</h3>
-      <p>Applicants can prepare applications, upload required documents, respond to review comments and monitor progress from submission through final IRB decision.</p>
+      <p>Applicants create their own accounts, prepare applications, upload required documents, respond to review comments and monitor progress from submission through final IRB decision.</p>
       <ul class="feature-list">
         <li>New ethical clearance applications</li>
         <li>Document uploads and revised submissions</li>
@@ -45,7 +70,7 @@
       <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
       <button class="btn full" type="submit">Sign in as Applicant</button>
       <a class="btn secondary full create-account-btn" href="/register">Create Applicant Account</a>
-      <p class="form-help">New applicants create their own account, then start an application immediately.</p>
+      <p class="form-help">New applicants can create an account and begin an application immediately.</p>
     </form>
   </div>
 
@@ -53,7 +78,7 @@
     <div class="portal-panel-copy">
       <span class="portal-kicker">Administrative and review workspace</span>
       <h3>Access committee and IRB functions</h3>
-      <p>This portal is for authorised institutional users. Your account role automatically opens the correct dashboard after login.</p>
+      <p>Administrative accounts are created only by the System Administrator. Your assigned role opens the correct secure dashboard after login.</p>
       <div class="role-chips" aria-label="Administrative portal roles">
         <span>IRB Secretariat</span>
         <span>College Scientific Committee</span>
@@ -75,9 +100,9 @@
 </section>
 
 <section class="steps workflow-steps">
-  <div><b>1</b><h3>Submit centrally</h3><p>Applicants submit their application and supporting documents to the IRB Secretariat.</p></div>
-  <div><b>2</b><h3>Scientific review</h3><p>The relevant College sees the submission and requests authority before documents are activated for scientific review.</p></div>
-  <div><b>3</b><h3>IRB decision</h3><p>Scientifically recommended applications return to the Secretariat for ethical review and final IRB determination.</p></div>
+  <div><b>1</b><h3>Submit centrally</h3><p>Every applicant submits to the IRB Secretariat.</p></div>
+  <div><b>2</b><h3>Route correctly</h3><p>Five Colleges use Scientific Committees. Other UCC units stay with the Secretariat.</p></div>
+  <div><b>3</b><h3>IRB review</h3><p>The IRB completes ethical review, decision and clearance.</p></div>
 </section>
 
 <script>
