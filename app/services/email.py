@@ -129,3 +129,30 @@ def college_revision_submitted_email(*, officer_name: str, officer_email: str, a
     </div></body></html>'''
     send_gmail_html(officer_email, f'UCC Revised Scientific Review Submission · {reference_no}', html)
     return html
+
+
+
+def secretariat_return_email(*, applicant_name: str, applicant_email: str, reference_no: str,
+                              research_title: str, overall_note: str,
+                              document_comments: list[tuple[str, str]], application_url: str) -> str:
+    items = ''.join(
+        '<li><strong>' + escape(label) + '</strong>: ' + escape(comment) + '</li>'
+        for label, comment in document_comments if comment
+    )
+    comments_html = '<ul>' + items + '</ul>' if items else '<p>No document-specific comments were recorded.</p>'
+    overall_html = ('<div style="margin:18px 0;padding:15px;background:#fff7dc;border-left:4px solid #c69b2d">'
+                    '<strong>Secretariat note</strong><br>' + escape(overall_note) + '</div>') if overall_note else ''
+    html = f'''<!doctype html><html><body style="font-family:Arial,sans-serif;color:#182431;line-height:1.55">
+    <div style="max-width:680px;margin:auto;padding:24px">
+      <div style="font-size:12px;text-transform:uppercase;color:#c69b2d;font-weight:bold">University of Cape Coast</div>
+      <h2 style="color:#082b4c">First Submission Requires Correction</h2>
+      <p>Dear {escape(applicant_name)},</p>
+      <p>Your ethical-clearance application <strong>{escape(reference_no)}</strong>, “{escape(research_title)}”, has been screened by the IRB Secretariat and returned for correction before it can proceed.</p>
+      {overall_html}
+      <p><strong>Document-specific comments</strong></p>{comments_html}
+      <p>Please replace or correct the affected document(s), then resubmit the application through your applicant portal. The corrected first submission will return to the IRB Secretariat for re-screening.</p>
+      <p><a href="{escape(application_url)}" style="display:inline-block;background:#082b4c;color:#fff;text-decoration:none;padding:12px 18px;border-radius:7px;font-weight:bold">Open Application</a></p>
+      <p>Regards,<br>Institutional Review Board Secretariat<br>University of Cape Coast</p>
+    </div></body></html>'''
+    send_gmail_html(applicant_email, f'UCC IRB First Submission Correction · {reference_no}', html)
+    return html
