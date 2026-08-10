@@ -45,33 +45,56 @@
   <h2>{% if app.status in ['college_revision_required','irb_revision_required'] %}Upload revised documents{% else %}Upload supporting documents{% endif %}</h2>
   {% if app.status == 'returned_to_applicant_admin' and app.secretariat_note %}<div class="alert warning"><strong>Secretariat request:</strong> {{ app.secretariat_note }}</div>{% endif %}
   <div class="upload-resource-note"><span>Need a form?</span><a href="/applicant-guide#resources">Open UCC-IRB Forms & Templates</a><a href="/applicant-guide#required-documents">View Required Documents</a></div>
-  <form method="post" action="/applications/{{ app.id }}/documents" enctype="multipart/form-data" class="inlineform">
-    <select name="document_type" required>
-      <option>Research Protocol</option>
-      <option>Completed UCC-IRB Composite Form</option>
-      <option>Application Letter</option>
-      <option>Data Collection Instrument</option>
-      <option>Supervisor Approval</option>
-      <option>Head of Unit Support Letter</option>
-      <option>Collaborator Support Letter</option>
-      <option>Participant Information Sheet</option>
-      <option>Consent Form</option>
-      <option>Assent Form</option>
-      <option>Consent from Records Keeper</option>
-      <option>Completed IRB Checklist</option>
-      <option>Similarity Report</option>
-      <option>Applicant Abridged CV</option>
-      <option>Supervisor Abridged CV</option>
-      <option>Recruitment Material</option>
-      <option>Data Management Plan</option>
-      <option>Response to College Review</option>
-      <option>Response to IRB Review</option>
-      <option>Tracked Changes Protocol</option>
-      <option>Other Supporting Document</option>
-    </select>
-    <input type="file" name="file" required>
-    <button class="btn secondary" type="submit">Upload</button>
-  </form>
+  <div class="upload-guidance-grid">
+    <div>
+      <form method="post" action="/applications/{{ app.id }}/documents" enctype="multipart/form-data" class="upload-form-stack" id="documentUploadForm">
+        <label>Document type<select name="document_type" id="documentTypeSelect" required>
+          <option value="">Select document type</option>
+          <option>Research Protocol</option>
+          <option>Completed UCC-IRB Composite Form</option>
+          <option>Application Letter</option>
+          <option>Data Collection Instrument</option>
+          <option>Supervisor Approval</option>
+          <option>Head of Unit Support Letter</option>
+          <option>Collaborator Support Letter</option>
+          <option>Participant Information Sheet</option>
+          <option>Consent Form</option>
+          <option>Assent Form</option>
+          <option>Consent from Records Keeper</option>
+          <option>Completed IRB Checklist</option>
+          <option>Similarity Report</option>
+          <option>Applicant Abridged CV</option>
+          <option>Supervisor Abridged CV</option>
+          <option>Recruitment Material</option>
+          <option>Data Management Plan</option>
+          <option>Response to College Review</option>
+          <option>Response to IRB Review</option>
+          <option>Tracked Changes Protocol</option>
+          <option>Other Supporting Document</option>
+        </select></label>
+        <label>Select file<input type="file" name="file" id="documentFileInput" required></label>
+        <button class="btn secondary" type="submit">Upload Selected Document</button>
+      </form>
+    </div>
+    <aside class="student-document-checklist">
+      {% if app.status in ['draft','returned_to_applicant_admin'] %}
+        <span class="eyebrow">Required documents</span><h3>Application checklist</h3>
+        <p>Each item turns green after a matching document is successfully uploaded.</p>
+        <ul>{% for label,present in required_document_rows %}<li class="{{ 'done' if present else 'pending' }}"><span>{{ '✓' if present else '○' }}</span><b>{{ label }}</b></li>{% endfor %}</ul>
+        <div class="conditional-docs"><strong>When applicable</strong><small>Consent/assent forms, records-keeper consent, data collection instruments and recruitment materials.</small></div>
+      {% elif app.status == 'college_revision_required' %}
+        <span class="eyebrow">Revision checklist</span><h3>College revision</h3>
+        {% set college_response_ready = college_revision_documents|selectattr('document_type','equalto','Response to College Review')|list %}{% set college_affected_ready = college_revision_documents|rejectattr('document_type','equalto','Response to College Review')|list %}<ul><li class="{{ 'done' if college_response_ready else 'pending' }}"><span>{{ '✓' if college_response_ready else '○' }}</span><b>Response to College Review</b></li><li class="{{ 'done' if college_affected_ready else 'pending' }}"><span>{{ '✓' if college_affected_ready else '○' }}</span><b>Revised protocol / affected documents</b></li></ul>
+      {% else %}
+        <span class="eyebrow">Revision checklist</span><h3>IRB revision</h3>
+        {% set irb_response_ready = irb_revision_documents|selectattr('document_type','equalto','Response to IRB Review')|list %}{% set irb_affected_ready = irb_revision_documents|rejectattr('document_type','equalto','Response to IRB Review')|list %}<ul><li class="{{ 'done' if irb_response_ready else 'pending' }}"><span>{{ '✓' if irb_response_ready else '○' }}</span><b>Response to IRB Review</b></li><li class="{{ 'done' if irb_affected_ready else 'pending' }}"><span>{{ '✓' if irb_affected_ready else '○' }}</span><b>Revised protocol / affected documents</b></li></ul>
+      {% endif %}
+      <div id="selectionHint" class="selection-hint">Choose a document type and file to continue.</div>
+    </aside>
+  </div>
+  <script>
+  (function(){const t=document.getElementById('documentTypeSelect'),f=document.getElementById('documentFileInput'),h=document.getElementById('selectionHint');if(!t||!f||!h)return;function u(){if(t.value&&f.files&&f.files.length){h.textContent='Ready to upload: '+t.value+' · '+f.files[0].name;h.classList.add('ready');}else if(t.value){h.textContent='Selected: '+t.value+'. Now choose the file.';h.classList.remove('ready');}else{h.textContent='Choose a document type and file to continue.';h.classList.remove('ready');}}t.addEventListener('change',u);f.addEventListener('change',u);})();
+  </script>
   {% if app.status in ['draft','returned_to_applicant_admin'] %}
     <form method="post" action="/applications/{{ app.id }}/submit" class="submitbox">
       <button class="btn" type="submit">Submit to IRB Secretariat</button>
@@ -182,22 +205,50 @@
 
 {% if assignments %}
 <section class="card">
-  <h2>Reviewer assignments and reports</h2>
+  <h2>{% if user.id == app.applicant_id %}Review reports{% else %}Reviewer assignments and reports{% endif %}</h2>
   {% for x in assignments %}
   <div class="review-box">
-    <h4>{{ x.level.replace('_',' ').title() }} · {{ x.assignment_type.title() }} reviewer</h4>
-    <div class="review-meta"><span>{{ x.reviewer.full_name }}</span><span>Assigned {{ x.assigned_at.strftime('%d %b %Y') }}</span><span class="chip">{{ x.status.title() }}</span>{% if assignment_meta.get(x.id) and assignment_meta[x.id].due_at %}<span>Due {{ assignment_meta[x.id].due_at.strftime('%d %b %Y') }}</span>{% endif %}</div>
+    <h4>{{ 'Scientific reviewer' if x.level == 'college' else 'IRB ethical reviewer' }}{% if user.id != app.applicant_id %} · {{ x.assignment_type.replace('_',' ').title() }}{% endif %}</h4>
+    <div class="review-meta">
+      {% if user.id != app.applicant_id %}<span>{{ x.reviewer.full_name }}</span>{% endif %}
+      <span>Assigned {{ x.assigned_at.strftime('%d %b %Y') }}</span><span class="chip">{{ x.status.title() }}</span>{% if user.id != app.applicant_id and assignment_meta.get(x.id) and assignment_meta[x.id].due_at %}<span>Due {{ assignment_meta[x.id].due_at.strftime('%d %b %Y') }}</span>{% endif %}
+    </div>
     {% if x.recommendation %}<p><strong>Recommendation:</strong> {{ x.recommendation.replace('_',' ').title() }}</p>{% endif %}
     {% if x.comments %}<div class="review-comments">{{ x.comments }}</div>{% endif %}
     {% if report_documents.get(x.id) %}
-      <div class="review-files"><strong>Submitted review files:</strong>
-      {% for rf in report_documents[x.id] %}<a href="/review-reports/{{ rf.id }}/download">{{ rf.document_kind.replace('_',' ').title() }} · {{ rf.original_name }}</a>{% endfor %}
+      <div class="review-files"><strong>{% if user.id == app.applicant_id %}Review report available:{% else %}Submitted review files:{% endif %}</strong>
+      {% for rf in report_documents[x.id] %}
+        {% if user.id != app.applicant_id or rf.document_kind == 'review_report' %}<a href="/review-reports/{{ rf.id }}/download">{% if user.id == app.applicant_id %}Download {{ 'Scientific' if x.level == 'college' else 'IRB' }} Review Report{% else %}{{ rf.document_kind.replace('_',' ').title() }} · {{ rf.original_name }}{% endif %}</a>{% endif %}
+      {% endfor %}
       </div>
     {% endif %}
-    {% if declarations.get(x.id) and declarations[x.id].declaration == 'conflict' %}<div class="alert danger">Reviewer declared a conflict of interest and declined this assignment.</div>{% endif %}
+    {% if user.id != app.applicant_id and declarations.get(x.id) and declarations[x.id].declaration == 'conflict' %}<div class="alert danger">Reviewer declared a conflict of interest and declined this assignment.</div>{% endif %}
   </div>
   {% endfor %}
 </section>
+{% endif %}
+
+{% if user.role == 'college_admin' and app.status == 'college_revised_submission_received' %}
+<section class="card actioncard revision-disposition">
+  <div class="sectionhead"><div><span class="eyebrow">Revised submission received</span><h2>Decide whether the revision needs reviewer re-check</h2></div></div>
+  <p>The applicant's revised documents have returned directly to the College Scientific Committee. Previous-round reviewers are attached below. Select the reviewer(s) only if the revision should be sent back for another scientific check. Otherwise, record an administrative review and proceed to the Committee decision.</p>
+  <form method="post" action="/college/{{ app.id }}/revision-disposition" id="revisionDispositionForm">
+    <div class="revision-choice-grid">
+      <label class="revision-choice"><input type="radio" name="review_action" value="resubmit" required onchange="togglePreviousReviewers()"><span><strong>Yes, resubmit for review</strong><small>Email the revised documents to selected previous reviewer(s).</small></span></label>
+      <label class="revision-choice"><input type="radio" name="review_action" value="administrative" required onchange="togglePreviousReviewers()"><span><strong>No, administratively reviewed</strong><small>No reviewer re-check is needed. Move the application to College decision.</small></span></label>
+    </div>
+    <div id="previousReviewerPanel" class="previous-reviewer-panel">
+      <h3>Previous-round reviewer(s)</h3>
+      {% if previous_college_reviewers %}
+        <div class="previous-reviewer-list">{% for r in previous_college_reviewers %}<label><input type="checkbox" name="reviewer_ids" value="{{ r.reviewer_id }}"><span><strong>{{ r.name }}</strong><small>{{ r.email }}{% if r.last_completed %} · Previous report {{ r.last_completed.strftime('%d %b %Y') }}{% endif %}</small></span></label>{% endfor %}</div>
+      {% else %}<div class="alert warning">No completed previous-round reviewer could be identified. Use administrative review or assign a new reviewer from the Review Assignment Queue.</div>{% endif %}
+      <label>Re-review due in days<input type="number" name="due_days" min="1" max="90" value="{{ default_due_days }}"></label>
+      <p class="hint">When resubmitted, the latest College revision documents are attached to the email where size permits and are also placed in the secure reviewer workspace.</p>
+    </div>
+    <button class="btn" type="submit">Continue Revised Submission</button>
+  </form>
+</section>
+<script>function togglePreviousReviewers(){const v=document.querySelector('input[name="review_action"]:checked');const p=document.getElementById('previousReviewerPanel');if(!v||!p)return;p.style.display=v.value==='resubmit'?'block':'none';}togglePreviousReviewers();</script>
 {% endif %}
 
 {% if user.role == 'college_admin' and app.status == 'awaiting_college_decision' %}
@@ -327,7 +378,7 @@
 <section class="card">
   <h2>Application workflow history</h2>
   <ol class="timeline">
-    {% for h in status_history %}<li><strong>{{ h.to_status.replace('_',' ').title() }}</strong><small>{{ h.created_at.strftime('%d %b %Y %H:%M') }}</small>{% if h.note %}<div>{{ h.note }}</div>{% endif %}</li>{% endfor %}
+    {% for h in status_history %}<li><strong>{{ h.to_status.replace('_',' ').title() }}</strong><small>{{ h.created_at.strftime('%d %b %Y %H:%M') }}</small>{% set visible_note = public_history_notes.get(h.id) if user.id == app.applicant_id else h.note %}{% if visible_note %}<div>{{ visible_note }}</div>{% endif %}</li>{% endfor %}
   </ol>
 </section>
 {% endif %}

@@ -38,7 +38,18 @@
   {{ app_table(fresh_apps, 'Fresh submissions') }}
   {{ app_table(revised_apps, 'Revised submissions', 'revised') }}
 
-  <h2 class="assignment-step">2. Reviewer and assignment details</h2>
+  <div class="review-material-picker">
+    <h2 class="assignment-step">2. Select documents to send for review</h2>
+    <p>Tick the items the reviewer should check. For each selected application, the latest available version of the ticked document type is added to the secure review package and, where email size permits, attached directly to the review invitation email.</p>
+    <div class="material-check-grid">
+      {% for dtype in review_material_options %}
+      <label class="material-check"><input type="checkbox" name="document_types" value="{{ dtype }}" {% if dtype in default_review_materials %}checked{% endif %}><span>{{ dtype }}</span></label>
+      {% endfor %}
+    </div>
+    <div class="alert info compact-alert"><strong>Email attachment safeguard:</strong> selected files are attached up to the secure Gmail size limit. Any additional selected files remain available through the same secure reviewer workspace.</div>
+  </div>
+
+  <h2 class="assignment-step">3. Reviewer and assignment details</h2>
   {% if level == 'college' %}
     <div class="alert info"><strong>No reviewer portal account is required.</strong> Enter the reviewer details here. The system creates one secure assignment workspace and emails it to the reviewer, following the academic submission portal pattern.</div>
     {% if saved_contacts %}<label>Recently used reviewer <span class="optional">optional helper</span><select id="savedReviewer" onchange="fillReviewer(this)"><option value="">Enter reviewer manually</option>{% for c in saved_contacts %}<option data-title="{{ c.title or '' }}" data-first="{{ c.first_name }}" data-last="{{ c.last_name }}" data-email="{{ c.email }}" data-phone="{{ c.phone or '' }}">{{ c.title or '' }} {{ c.first_name }} {{ c.last_name }} · {{ c.email }}</option>{% endfor %}</select></label>{% endif %}

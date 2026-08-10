@@ -36,9 +36,9 @@
 <section class="card revision-card">
   <div class="sectionhead"><div><span class="eyebrow">Revised submissions</span><h2>Returned Directly by Applicants to the College</h2></div><a href="/college/review-queue#revised" class="btn secondary">Assign Revised Work</a></div>
   <p class="hint">After the first IRB Secretariat screening, revision communication stays between the College Scientific Committee and the applicant. These revisions do not return to the Secretariat until the College makes its final scientific recommendation.</p>
-  <div class="table-wrap"><table><thead><tr><th>Reference</th><th>Applicant</th><th>Research title</th><th>Status</th><th>Updated</th><th></th></tr></thead><tbody>
-  {% for a in revised_apps %}<tr><td>{{ a.reference_no }}</td><td>{{ a.applicant.full_name }}</td><td>{{ a.title }}</td><td><span class="status {{ a.status }}">{{ a.status.replace('_',' ').title() }}</span></td><td>{{ a.updated_at.strftime('%d %b %Y %H:%M') }}</td><td><a href="/applications/{{ a.id }}">Open revision</a></td></tr>
-  {% else %}<tr><td colspan="6" class="empty">No revised submissions waiting in this College.</td></tr>{% endfor %}
+  <div class="table-wrap"><table><thead><tr><th>Reference</th><th>Applicant</th><th>Research title</th><th>Previous reviewer(s)</th><th>Status</th><th>Updated</th><th></th></tr></thead><tbody>
+  {% for a in revised_apps %}{% set prevs=previous_reviewers_by_app.get(a.id,[]) %}<tr><td>{{ a.reference_no }}</td><td>{{ a.applicant.full_name }}</td><td>{{ a.title }}</td><td>{% for r in prevs %}<a class="reviewer-chip" href="/applications/{{ a.id }}">{{ r.name }}</a>{% else %}<span class="muted">None recorded</span>{% endfor %}</td><td><span class="status {{ a.status }}">{{ a.status.replace('_',' ').title() }}</span></td><td>{{ a.updated_at.strftime('%d %b %Y %H:%M') }}</td><td><a href="/applications/{{ a.id }}">Decide re-review</a></td></tr>
+  {% else %}<tr><td colspan="7" class="empty">No revised submissions waiting in this College.</td></tr>{% endfor %}
   </tbody></table></div>
 </section>
 {% endblock %}
