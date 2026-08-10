@@ -7,7 +7,6 @@ import time
 import logging
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
-from urllib.parse import urlparse
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy import func, select
@@ -110,53 +109,20 @@ def ensure_csrf_token(request: Request) -> str:
     return token
 
 
-def same_origin(request: Request) -> bool:
-    origin = request.headers.get("origin")
-    referer = request.headers.get("referer")
-    source = origin or referer
-    if not source:
-        return True
-    try:
-        parsed = urlparse(source)
-        source_host = parsed.netloc.lower()
-        candidates = {
-            request.headers.get("host", "").lower(),
-            request.headers.get("x-forwarded-host", "").split(",")[0].strip().lower(),
-            request.url.netloc.lower(),
-        }
-        candidates.discard("")
-        return any(hmac.compare_digest(source_host, candidate) for candidate in candidates)
-    except Exception:
-        return False
-
-
 async def csrf_protect(request: Request):
     token = ensure_csrf_token(request)
     if request.method in _SAFE_METHODS:
         return
 
-    # Public applicant authentication is intentionally lower-friction.
-    # Login and registration do not depend on a CSRF form token, because stale
-    # session cookies and campus/mobile proxy changes can otherwise block genuine
-    # applicants. We still require a same-origin browser submission, SameSite=Lax
-    # session cookies, password verification and login rate/lockout controls.
+    # Origin/Referer host matching is intentionally disabled for all portals.
+    # Render and institutional proxies can rewrite these headers and incorrectly
+    # block legitimate users. Public login and registration remain protected by
+    # password verification, account lockout, rate limits and secure session cookies.
     if request.url.path in {"/login", "/register"}:
-        if not same_origin(request):
-            logger.warning(
-                "Public auth same-origin rejection path=%s host=%s forwarded_host=%s origin=%s referer=%s",
-                request.url.path, request.headers.get("host"), request.headers.get("x-forwarded-host"),
-                request.headers.get("origin"), request.headers.get("referer"),
-            )
-            raise HTTPException(status_code=403, detail="Cross-site request blocked. Please open the portal directly and try again.")
         return
 
-    if not same_origin(request):
-        logger.warning(
-            "CSRF same-origin rejection path=%s host=%s forwarded_host=%s origin=%s referer=%s",
-            request.url.path, request.headers.get("host"), request.headers.get("x-forwarded-host"),
-            request.headers.get("origin"), request.headers.get("referer"),
-        )
-        raise HTTPException(status_code=403, detail="Cross-site request blocked. Refresh the page and try again.")
+    # Protected workflow POSTs still require the per-session CSRF token, but they
+    # are no longer rejected based on Origin/Referer host comparison.
     header_token = request.headers.get("x-csrf-token")
     supplied = header_token
     if not supplied:

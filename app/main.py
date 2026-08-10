@@ -119,7 +119,7 @@ app.state.templates = Jinja2Templates(directory=BASE_DIR / 'app' / 'templates')
 app.include_router(auth.router)
 app.include_router(portal.router)
 
-BUILD_ID = '2026-08-10-balanced-applicant-security-v16'
+BUILD_ID = '2026-08-10-origin-check-removed-v17'
 
 
 @app.get('/healthz', include_in_schema=False)
@@ -148,7 +148,9 @@ def healthz():
         'college_dashboard_organised': True,
         'security_hardening': 'v1',
         'csrf_protection': True,
-        'applicant_auth_csrf_mode': 'same-origin-no-form-token',
+        'origin_host_check': False,
+        'public_auth_csrf_form_token': False,
+        'protected_workflow_csrf_token': True,
         'applicant_login_lockout': 'account-based',
         'admin_login_lockout': 'account-and-ip',
         'login_rate_controls': True,
