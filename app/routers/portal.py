@@ -35,6 +35,7 @@ from ..models import (
     ReviewAssignmentMeta,
     ReviewAssignmentBatch,
     ReviewAssignmentBatchItem,
+    ReviewAssignmentDocument,
     ReviewReportDocument,
     ReviewerAssignment,
     ReviewerDeclaration,
@@ -62,6 +63,37 @@ from ..services.routing import (
 )
 
 router = APIRouter()
+
+
+REVIEW_MATERIAL_OPTIONS = [
+    'Application Letter',
+    'Research Protocol',
+    'Completed UCC-IRB Composite Form',
+    'Data Collection Instrument',
+    'Participant Information Sheet',
+    'Consent Form',
+    'Assent Form',
+    'Consent from Records Keeper',
+    'Completed IRB Checklist',
+    'Similarity Report',
+    'Applicant Abridged CV',
+    'Supervisor Approval',
+    'Head of Unit Support Letter',
+    'Supervisor Abridged CV',
+    'Response to College Review',
+    'Tracked Changes Protocol',
+    'Response to IRB Review',
+    'Other Supporting Document',
+]
+
+DEFAULT_REVIEW_MATERIALS = {
+    'Research Protocol', 'Completed UCC-IRB Composite Form', 'Data Collection Instrument',
+    'Participant Information Sheet', 'Consent Form', 'Assent Form', 'Consent from Records Keeper',
+    'Response to College Review', 'Tracked Changes Protocol', 'Response to IRB Review',
+}
+
+MAX_REVIEW_EMAIL_ATTACHMENT_BYTES = 18 * 1024 * 1024
+MAX_REVIEW_EMAIL_ATTACHMENTS = 18
 
 
 def ctx(request, user=None, **kwargs):
@@ -413,6 +445,139 @@ def report_documents_map(db: Session, assignments):
     return result
 
 
+def review_assignment_documents_map(db: Session, assignments):
+    ids = [a.id for a in assignments]
+    result = {a.id: [] for a in assignments}
+    if not ids:
+        return result
+    rows = db.scalars(
+        select(ReviewAssignmentDocument)
+        .options(joinedload(ReviewAssignmentDocument.document))
+        .where(ReviewAssignmentDocument.assignment_id.in_(ids))
+        .order_by(ReviewAssignmentDocument.created_at)
+    ).all()
+    for row in rows:
+        if row.document:
+            result.setdefault(row.assignment_id, []).append(row.document)
+    return result
+
+
+def latest_documents_for_types(db: Session, app_id: str, document_types: list[str] | None = None):
+    docs = db.scalars(
+        select(ApplicationDocument)
+        .where(ApplicationDocument.application_id == app_id)
+        .order_by(ApplicationDocument.document_type, ApplicationDocument.version.desc(), ApplicationDocument.uploaded_at.desc())
+    ).all()
+    latest = {}
+    for doc in docs:
+        latest.setdefault(doc.document_type, doc)
+    if document_types:
+        wanted = set(document_types)
+        return [doc for dtype, doc in latest.items() if dtype in wanted]
+    return list(latest.values())
+
+
+def latest_revision_documents(db: Session, app_id: str, submission_kind: str = 'college_revision'):
+    latest_round = db.scalar(select(func.max(DocumentSubmissionMeta.round_no)).where(
+        DocumentSubmissionMeta.application_id == app_id,
+        DocumentSubmissionMeta.submission_kind == submission_kind,
+    ))
+    if not latest_round:
+        return []
+    return db.scalars(
+        select(ApplicationDocument)
+        .join(DocumentSubmissionMeta, DocumentSubmissionMeta.document_id == ApplicationDocument.id)
+        .where(
+            DocumentSubmissionMeta.application_id == app_id,
+            DocumentSubmissionMeta.submission_kind == submission_kind,
+            DocumentSubmissionMeta.round_no == latest_round,
+        )
+        .order_by(ApplicationDocument.document_type, ApplicationDocument.version.desc())
+    ).all()
+
+
+def selected_review_documents(db: Session, assignment_id: str):
+    rows = db.scalars(
+        select(ReviewAssignmentDocument)
+        .options(joinedload(ReviewAssignmentDocument.document))
+        .where(ReviewAssignmentDocument.assignment_id == assignment_id)
+        .order_by(ReviewAssignmentDocument.created_at)
+    ).all()
+    return [r.document for r in rows if r.document]
+
+
+def review_email_attachments_for_batch(db: Session, batch: ReviewAssignmentBatch):
+    items = db.scalars(
+        select(ReviewAssignmentBatchItem)
+        .options(joinedload(ReviewAssignmentBatchItem.assignment).joinedload(ReviewerAssignment.application))
+        .where(ReviewAssignmentBatchItem.batch_id == batch.id)
+        .order_by(ReviewAssignmentBatchItem.work_no)
+    ).unique().all()
+    attachments = []
+    skipped = []
+    total = 0
+    for item in items:
+        assignment = item.assignment
+        app = assignment.application
+        for doc in selected_review_documents(db, assignment.id):
+            path = storage_path(app.id, doc.stored_name)
+            if not path.exists():
+                skipped.append(doc.original_name)
+                continue
+            size = path.stat().st_size
+            filename = f'{_safe_zip_name(app.reference_no or app.id)} - {_safe_zip_name(doc.document_type)} - {_safe_zip_name(doc.original_name)}'
+            if len(attachments) >= MAX_REVIEW_EMAIL_ATTACHMENTS or total + size > MAX_REVIEW_EMAIL_ATTACHMENT_BYTES:
+                skipped.append(filename)
+                continue
+            attachments.append((path, filename))
+            total += size
+    note = f'{len(attachments)} selected document(s) attached to this email.'
+    if skipped:
+        note += f' {len(skipped)} additional selected document(s) were kept in the secure workspace because of email attachment limits.'
+    if not attachments:
+        note = 'No document files were attached. The selected review materials remain available in the secure workspace.'
+    return attachments, note
+
+
+def applicant_public_history_note(note: str | None) -> str | None:
+    if not note:
+        return note
+    lowered = note.lower()
+    if lowered.startswith('assigned scientific review to ') or 'scientific reviewer' in lowered and 'assigned' in lowered:
+        return 'Assigned scientific reviewer'
+    if lowered.startswith('assigned irb ethical review to ') or 'irb ethical reviewer' in lowered and 'assigned' in lowered:
+        return 'Assigned IRB ethical reviewer'
+    return note
+
+
+def previous_college_reviewers(db: Session, app_id: str):
+    assignments = db.scalars(
+        select(ReviewerAssignment)
+        .options(joinedload(ReviewerAssignment.reviewer))
+        .where(
+            ReviewerAssignment.application_id == app_id,
+            ReviewerAssignment.level == 'college',
+            ReviewerAssignment.status == 'completed',
+        )
+        .order_by(ReviewerAssignment.completed_at.desc(), ReviewerAssignment.assigned_at.desc())
+    ).all()
+    seen = set()
+    result = []
+    for assignment in assignments:
+        if assignment.reviewer_id in seen:
+            continue
+        seen.add(assignment.reviewer_id)
+        contact = reviewer_contact_for_proxy(db, assignment.reviewer_id)
+        if contact:
+            name = ' '.join(x for x in [contact.title or '', contact.first_name, contact.last_name] if x).strip()
+            email = contact.email
+        else:
+            name = assignment.reviewer.full_name if assignment.reviewer else 'Previous reviewer'
+            email = assignment.reviewer.email if assignment.reviewer else ''
+        result.append({'reviewer_id': assignment.reviewer_id, 'name': name, 'email': email, 'last_completed': assignment.completed_at})
+    return result
+
+
 def complete_review_assignment(db: Session, assignment: ReviewerAssignment, actor_id: str,
                                recommendation: str, comments: str):
     assignment.recommendation = recommendation
@@ -593,10 +758,12 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         )).all()
         attention_by_app = {r.application_id: r for r in pending_attention}
         counts = {st: sum(1 for a in apps if a.status == st) for st in set(a.status for a in apps)}
+        previous_reviewers_by_app = {a.id: previous_college_reviewers(db, a.id) for a in revised_apps}
         return request.app.state.templates.TemplateResponse(
             request, 'dashboard_college.html',
             ctx(request, user, apps=apps, counts=counts, pending_initial=pending_initial, fresh_apps=fresh_apps,
-                revised_apps=revised_apps, attention_by_app=attention_by_app, submission_kinds=kinds)
+                revised_apps=revised_apps, attention_by_app=attention_by_app, submission_kinds=kinds,
+                previous_reviewers_by_app=previous_reviewers_by_app)
         )
 
     if user.role in {Role.COLLEGE_REVIEWER.value, Role.IRB_REVIEWER.value}:
@@ -883,6 +1050,8 @@ def application_detail(request: Request, app_id: str, db: Session = Depends(get_
     declarations = declaration_map(db, assignments)
     assignment_meta = assignment_meta_map(db, assignments)
     report_documents = report_documents_map(db, assignments)
+    assignment_documents = review_assignment_documents_map(db, assignments)
+    prior_college_reviewers = previous_college_reviewers(db, app.id) if user.role == Role.COLLEGE_ADMIN.value and user.college_id == app.college_id else []
 
     college_reviewers = []
     irb_reviewers = []
@@ -917,6 +1086,7 @@ def application_detail(request: Request, app_id: str, db: Session = Depends(get_
     status_history = db.scalars(
         select(StatusHistory).where(StatusHistory.application_id == app.id).order_by(StatusHistory.created_at.desc())
     ).all()
+    public_history_notes = {h.id: applicant_public_history_note(h.note) for h in status_history}
     meetings = db.scalars(select(IRBMeeting).where(IRBMeeting.status.in_(['scheduled', 'draft'])).order_by(IRBMeeting.meeting_date)).all()
     meeting_items = db.scalars(
         select(IRBMeetingItem)
@@ -945,6 +1115,8 @@ def application_detail(request: Request, app_id: str, db: Session = Depends(get_
             declarations=declarations,
             assignment_meta=assignment_meta,
             report_documents=report_documents,
+            assignment_documents=assignment_documents,
+            previous_college_reviewers=prior_college_reviewers,
             college_reviewers=college_reviewers,
             irb_reviewers=irb_reviewers,
             reviewer_workload=reviewer_workload(db, irb_reviewers or college_reviewers),
@@ -954,6 +1126,7 @@ def application_detail(request: Request, app_id: str, db: Session = Depends(get_
             certificates=certificates,
             post_requests=post_requests,
             status_history=status_history,
+            public_history_notes=public_history_notes,
             meetings=meetings,
             meeting_items=meeting_items,
             can_docs=can_docs,
@@ -1486,6 +1659,122 @@ def submit_review(
     return RedirectResponse(f'/applications/{app.id}', status_code=303)
 
 
+@router.post('/college/{app_id}/revision-disposition')
+def college_revision_disposition(
+    request: Request,
+    app_id: str,
+    review_action: str = Form(...),
+    reviewer_ids: list[str] = Form([]),
+    due_days: int = Form(REVIEW_DUE_DAYS),
+    db: Session = Depends(get_db),
+):
+    user = require_user(request, db)
+    require_roles(user, Role.COLLEGE_ADMIN.value)
+    app = get_app_or_404(db, app_id)
+    if user.college_id != app.college_id or app.status != AppStatus.COLLEGE_REVISED.value:
+        raise HTTPException(403, 'This revised submission is not available for College disposition.')
+
+    if review_action == 'administrative':
+        transition(db, app, AppStatus.AWAITING_COLLEGE_DECISION.value, user.id, 'Revised submission administratively reviewed by College Scientific Committee')
+        audit(db, user.id, 'college_revision_administratively_reviewed', app.id, 'Proceed to College Scientific Committee decision without reviewer resubmission')
+        db.commit()
+        return RedirectResponse(f'/applications/{app.id}', status_code=303)
+
+    if review_action != 'resubmit':
+        raise HTTPException(400, 'Choose whether to resubmit the revision for review or review it administratively.')
+    if not reviewer_ids:
+        raise HTTPException(400, 'Select at least one previous reviewer for re-review.')
+    if not gmail_configured():
+        raise HTTPException(503, 'Gmail delivery must be configured to email revised documents to previous reviewers.')
+
+    valid_previous = db.scalars(
+        select(ReviewerAssignment)
+        .where(
+            ReviewerAssignment.application_id == app.id,
+            ReviewerAssignment.level == 'college',
+            ReviewerAssignment.status == 'completed',
+            ReviewerAssignment.reviewer_id.in_(list(dict.fromkeys(reviewer_ids))),
+        )
+        .order_by(ReviewerAssignment.completed_at.desc())
+    ).all()
+    valid_ids = {a.reviewer_id for a in valid_previous}
+    requested_ids = list(dict.fromkeys(reviewer_ids))
+    if any(rid not in valid_ids for rid in requested_ids):
+        raise HTTPException(400, 'One or more selected reviewers did not review a previous College round for this application.')
+
+    revision_docs = latest_revision_documents(db, app.id, 'college_revision')
+    if not revision_docs:
+        raise HTTPException(400, 'No revised documents were found for the latest College revision round.')
+
+    due_days = max(1, min(int(due_days), 90))
+    now = datetime.utcnow()
+    due_at = now + timedelta(days=due_days)
+    link_days = max(REVIEW_ASSIGNMENT_LINK_EXPIRY_DAYS, due_days + 7)
+    assigning_office = user.college.name + ' Scientific Committee' if user.college else 'College Scientific Committee'
+    sent = 0
+    failures = []
+
+    for reviewer_id in requested_ids:
+        reviewer = db.get(User, reviewer_id)
+        if not reviewer:
+            failures.append('A previous reviewer record could not be found.')
+            continue
+        token = new_review_token()
+        batch = ReviewAssignmentBatch(
+            reference=next_review_batch_reference(db, 'college'),
+            reviewer_id=reviewer.id,
+            level='college',
+            token_hash=review_token_hash(token),
+            link_expires_at=now + timedelta(days=link_days),
+            due_at=due_at,
+            message='Revised submission returned for re-review. Please focus on the applicant response and revised documents.',
+            email_status='pending',
+            created_by=user.id,
+        )
+        db.add(batch)
+        db.flush()
+        assignment = ReviewerAssignment(
+            application_id=app.id, reviewer_id=reviewer.id, level='college', assignment_type='re-review',
+            status='assigned', assigned_by=user.id,
+        )
+        db.add(assignment)
+        db.flush()
+        db.add(ReviewAssignmentMeta(assignment_id=assignment.id, due_at=due_at))
+        db.add(ReviewAssignmentBatchItem(batch_id=batch.id, assignment_id=assignment.id, work_no=1))
+        for doc in revision_docs:
+            db.add(ReviewAssignmentDocument(assignment_id=assignment.id, document_id=doc.id, selected_by=user.id))
+        db.flush()
+
+        contact = reviewer_contact_for_proxy(db, reviewer.id)
+        reviewer_name = (' '.join(x for x in [contact.title or '', contact.first_name, contact.last_name] if x).strip() if contact else reviewer.full_name)
+        reviewer_email = contact.email if contact else reviewer.email
+        secure_url = f'{_base_url(request)}/secure/reviews/{token}'
+        try:
+            attachments, attachment_note = review_email_attachments_for_batch(db, batch)
+            review_assignment_email(
+                reviewer_name=reviewer_name, reviewer_email=reviewer_email, level='college', count=1,
+                secure_url=secure_url, due_at=due_at, link_expires_at=batch.link_expires_at,
+                message=batch.message or '', assigning_office=assigning_office,
+                attachments=attachments, attachment_note=attachment_note,
+            )
+            batch.email_status = 'sent'
+            batch.sent_at = datetime.utcnow()
+            sent += 1
+        except Exception as exc:
+            batch.email_status = 'failed'
+            batch.last_email_error = str(exc)[:1000]
+            failures.append(f'{reviewer_name}: {exc}')
+        audit(db, user.id, 'college_revision_reviewer_reassigned', app.id, f'{batch.reference} | previous reviewer | re-review')
+
+    if sent == 0 and failures:
+        db.rollback()
+        raise HTTPException(502, 'Could not email the revised submission to the selected reviewer(s): ' + '; '.join(failures[:3]))
+
+    transition(db, app, AppStatus.COLLEGE_REVIEW.value, user.id, 'Revised submission sent to previous scientific reviewer(s)')
+    db.commit()
+    return RedirectResponse(f'/applications/{app.id}', status_code=303)
+
+
 @router.post('/college/{app_id}/decision')
 def college_decision(
     request: Request,
@@ -1599,7 +1888,7 @@ def assign_irb_reviewer(
     db.add(assignment)
     db.flush()
     db.add(ReviewAssignmentMeta(assignment_id=assignment.id, due_at=datetime.utcnow() + timedelta(days=max(1, min(due_days, 90)))))
-    transition(db, app, AppStatus.IRB_REVIEW.value, user.id, f'Assigned IRB ethical review to {reviewer.full_name}')
+    transition(db, app, AppStatus.IRB_REVIEW.value, user.id, 'Assigned IRB ethical reviewer')
     db.commit()
     return RedirectResponse(f'/applications/{app.id}', status_code=303)
 
@@ -1983,6 +2272,8 @@ def _render_review_queue(request: Request, db: Session, user: User, level: str):
             max_reviewers=MAX_REVIEWERS_PER_APPLICATION,
             default_due_days=REVIEW_DUE_DAYS,
             email_ready=gmail_configured(),
+            review_material_options=REVIEW_MATERIAL_OPTIONS,
+            default_review_materials=DEFAULT_REVIEW_MATERIALS,
             error=None,
         ),
     )
@@ -2020,6 +2311,7 @@ def assign_review_batch(
     assignment_type: str = Form('primary'),
     due_days: int = Form(REVIEW_DUE_DAYS),
     message: str = Form(''),
+    document_types: list[str] = Form([]),
     db: Session = Depends(get_db),
 ):
     user = require_user(request, db)
@@ -2087,12 +2379,17 @@ def assign_review_batch(
         db.flush()
         db.add(ReviewAssignmentMeta(assignment_id=assignment.id, due_at=due_at))
         db.add(ReviewAssignmentBatchItem(batch_id=batch.id, assignment_id=assignment.id, work_no=idx))
+        selected_docs = latest_documents_for_types(db, app.id, document_types or None)
+        for selected_doc in selected_docs:
+            db.add(ReviewAssignmentDocument(
+                assignment_id=assignment.id, document_id=selected_doc.id, selected_by=user.id
+            ))
         if level == 'college':
             if app.status != AppStatus.COLLEGE_REVIEW.value:
-                transition(db, app, AppStatus.COLLEGE_REVIEW.value, user.id, f'Assigned scientific review to {reviewer.full_name}')
+                transition(db, app, AppStatus.COLLEGE_REVIEW.value, user.id, 'Assigned scientific reviewer')
         else:
             if app.status != AppStatus.IRB_REVIEW.value:
-                transition(db, app, AppStatus.IRB_REVIEW.value, user.id, f'Assigned IRB ethical review to {reviewer.full_name}')
+                transition(db, app, AppStatus.IRB_REVIEW.value, user.id, 'Assigned IRB ethical reviewer')
         audit(db, user.id, 'reviewer_assignment_created', app.id, f'{batch.reference} | {reviewer.full_name} | {level}')
 
     db.commit()
@@ -2106,6 +2403,7 @@ def assign_review_batch(
             delivery_name = f"{contact.title + ' ' if contact and contact.title else ''}{contact.first_name} {contact.last_name}".strip() if contact else reviewer.full_name
             delivery_email = contact.email if contact else reviewer.email
             assigning_office = user.college.name + ' Scientific Committee' if level == 'college' and user.college else 'Institutional Review Board Secretariat'
+            attachments, attachment_note = review_email_attachments_for_batch(db, batch)
             review_assignment_email(
                 reviewer_name=delivery_name,
                 reviewer_email=delivery_email,
@@ -2116,6 +2414,8 @@ def assign_review_batch(
                 link_expires_at=link_expires_at,
                 message=message.strip(),
                 assigning_office=assigning_office,
+                attachments=attachments,
+                attachment_note=attachment_note,
             )
             batch.email_status = 'sent'
             batch.sent_at = datetime.utcnow()
@@ -2161,10 +2461,11 @@ def _render_review_batch_detail(request: Request, db: Session, user: User, batch
     ).unique().all()
     declarations = declaration_map(db, [i.assignment for i in items])
     reports = report_documents_map(db, [i.assignment for i in items])
+    assignment_documents = review_assignment_documents_map(db, [i.assignment for i in items])
     return request.app.state.templates.TemplateResponse(
         request,
         'review_batch_detail.html',
-        ctx(request, user, batch=batch, review_contact=reviewer_contact_for_proxy(db, batch.reviewer_id), items=items, declarations=declarations, reports=reports, secure_url=secure_url, notice=notice, now=datetime.utcnow()),
+        ctx(request, user, batch=batch, review_contact=reviewer_contact_for_proxy(db, batch.reviewer_id), items=items, declarations=declarations, reports=reports, assignment_documents=assignment_documents, secure_url=secure_url, notice=notice, now=datetime.utcnow()),
     )
 
 
@@ -2195,6 +2496,7 @@ def resend_review_batch(request: Request, batch_id: str, db: Session = Depends(g
         reviewer_name = (f"{contact.title + ' ' if contact and contact.title else ''}{contact.first_name} {contact.last_name}".strip() if contact else batch.reviewer.full_name)
         reviewer_email = contact.email if contact else batch.reviewer.email
         assigning_office = (user.college.name + ' Scientific Committee') if batch.level == 'college' and user.college else 'Institutional Review Board Secretariat'
+        attachments, attachment_note = review_email_attachments_for_batch(db, batch)
         review_assignment_email(
             reviewer_name=reviewer_name,
             reviewer_email=reviewer_email,
@@ -2205,6 +2507,8 @@ def resend_review_batch(request: Request, batch_id: str, db: Session = Depends(g
             link_expires_at=batch.link_expires_at,
             message=batch.message or '',
             assigning_office=assigning_office,
+            attachments=attachments,
+            attachment_note=attachment_note,
         )
         batch.email_status = 'sent'
         batch.sent_at = datetime.utcnow()
@@ -2294,6 +2598,7 @@ def secure_review_workspace(request: Request, token: str, db: Session = Depends(
     assignments = [i.assignment for i in items]
     declarations = declaration_map(db, assignments)
     reports = report_documents_map(db, assignments)
+    assignment_documents = review_assignment_documents_map(db, assignments)
     db.commit()
     return request.app.state.templates.TemplateResponse(
         request,
@@ -2305,6 +2610,7 @@ def secure_review_workspace(request: Request, token: str, db: Session = Depends(
             'items': items,
             'declarations': declarations,
             'reports': reports,
+            'assignment_documents': assignment_documents,
             'token': token,
             'error': None,
             'now': datetime.utcnow(),
@@ -2374,14 +2680,11 @@ def secure_review_package(token: str, assignment_id: str, db: Session = Depends(
         raise HTTPException(403, 'Complete a no-conflict declaration before accessing research documents.')
 
     app = assignment.application
-    docs = db.scalars(
-        select(ApplicationDocument)
-        .where(ApplicationDocument.application_id == app.id)
-        .order_by(ApplicationDocument.document_type, ApplicationDocument.version.desc())
-    ).all()
-    latest = {}
-    for doc in docs:
-        latest.setdefault(doc.document_type, doc)
+    selected_docs = selected_review_documents(db, assignment.id)
+    if selected_docs:
+        package_docs = selected_docs
+    else:
+        package_docs = latest_documents_for_types(db, app.id)
 
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -2394,7 +2697,7 @@ def secure_review_package(token: str, assignment_id: str, db: Session = Depends(
             f'Review level: {assignment.level}\n'
         )
         zf.writestr('00 - Application Summary.txt', summary)
-        for idx, doc in enumerate(latest.values(), start=1):
+        for idx, doc in enumerate(package_docs, start=1):
             path = storage_path(app.id, doc.stored_name)
             if path.exists():
                 suffix = path.suffix or ''
@@ -2480,9 +2783,16 @@ def download_review_report(request: Request, document_id: str, db: Session = Dep
         allowed = True
     elif user.id == assignment.reviewer_id:
         allowed = True
+    elif user.id == app.applicant_id and doc.document_kind == 'review_report' and assignment.status == 'completed':
+        allowed = True
     if not allowed:
         raise HTTPException(403)
     path = storage_path(app.id, doc.stored_name)
     if not path.exists():
         raise HTTPException(404, 'Review report file is unavailable.')
-    return FileResponse(path, filename=doc.original_name, headers={'Cache-Control': 'no-store'})
+    filename = doc.original_name
+    if user.id == app.applicant_id:
+        suffix = path.suffix or ''
+        label = 'Scientific-Review-Report' if assignment.level == 'college' else 'IRB-Review-Report'
+        filename = f'{app.reference_no or "UCC-IRB"}-{label}{suffix}'
+    return FileResponse(path, filename=filename, headers={'Cache-Control': 'no-store'})
