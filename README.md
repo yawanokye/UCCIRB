@@ -1,4 +1,4 @@
-# UCC Ethical Clearance Portal — Phase 2 V6
+# UCC Ethical Clearance Portal — Phase 2 V12
 
 A working FastAPI/PostgreSQL-ready research ethics governance portal for the University of Cape Coast Institutional Review Board.
 
@@ -18,7 +18,7 @@ Applications from UCC academic or administrative units outside these five Colleg
 
 For the five Scientific Committee Colleges, the workflow is:
 
-`Applicant → IRB Secretariat screening → College metadata visibility → College requests access → Secretariat activates documents → College scientific review → College decision → IRB Secretariat → IRB ethical review → final IRB decision`
+`Applicant → IRB Secretariat receipt/checklist → Secretariat marks complete → automatic forwarding to College Scientific Committee → College scientific review/revision cycle → College recommendation → IRB Secretariat → IRB ethical review → final IRB decision`
 
 For other UCC units, the workflow is:
 
@@ -34,8 +34,8 @@ For other UCC units, the workflow is:
 - Central application submission and administrative screening
 - Five fixed Scientific Committee College routes
 - Direct IRB Secretariat route for other UCC academic/administrative units
-- Locked College documents until Secretariat access approval
-- College review access request and activation
+- College metadata visibility while first submissions await Secretariat screening
+- Automatic College document activation and forwarding after Secretariat completeness
 - College scientific reviewer assignment
 - Reviewer conflict-of-interest declaration
 - Reviewer deadlines and workload indicators
@@ -109,7 +109,7 @@ BOOTSTRAP_ADMIN_PASSWORD=<strong initial password>
 Use `/healthz` as the Render health check path. This build reports:
 
 ```text
-build: 2026-08-09-phase2-routing-v6
+build: 2026-08-10-review-revision-privacy-v12
 ```
 
 Uploaded documents should use a persistent disk mounted at `/app/storage` during development/testing. For full institutional production, migrate research documents to private institutional or S3-compatible object storage with malware scanning, encryption and retention controls.
@@ -213,3 +213,22 @@ PUBLIC_BASE_URL=https://ucc-irb-portal.onrender.com
 ```
 
 No additional environment variable is required for V11.
+
+
+## Phase 2 V12 — selected review materials, applicant review reports and revision disposition
+
+Build ID: `2026-08-10-review-revision-privacy-v12`
+
+This release strengthens the College Scientific Committee and applicant workflows.
+
+- College officers can tick the specific document types that should be checked by a reviewer. The latest available version of each selected type is bound to that reviewer assignment.
+- Selected review documents are added to the secure reviewer package and are also attached to the Gmail review invitation up to a conservative email-size limit. Files beyond the limit remain available in the secure workspace.
+- The reviewer workspace explicitly lists the items selected by the assigning office.
+- Applicants can download the completed main Scientific or IRB Review Report from their application record. The applicant download filename is generic and does not expose the reviewer name. Internal annotated/supporting reviewer files remain restricted.
+- Applicant-facing reviewer identity is hidden. Assignment cards use generic labels such as **Scientific reviewer**, and workflow history converts reviewer-specific assignment notes to **Assigned scientific reviewer** or **Assigned IRB ethical reviewer**.
+- The applicant upload area now includes a compact required-document checklist beside the upload controls. Successfully uploaded core items show a green tick. Revision rounds have their own response/revised-document checklist.
+- College dashboards keep fresh work and revised work separate. Revised-submission rows show the previous-round reviewer(s) as clickable names.
+- When a College revision returns, the College can choose **Yes, resubmit for review** and select one or more previous reviewers, or **No, administratively reviewed** and move directly to the College Committee decision stage.
+- Re-review sends only the latest College revision round to the selected previous reviewer(s), with those revised files attached to the email where size permits and available in the secure workspace.
+
+No additional Render environment variable is required for V12. Gmail attachment delivery uses the existing `GMAIL_*` settings.
