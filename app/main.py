@@ -117,7 +117,7 @@ app.include_router(auth.router)
 app.include_router(portal.router)
 
 
-BUILD_ID = '2026-08-10-secretariat-college-workflow-v11'
+BUILD_ID = '2026-08-10-review-revision-privacy-v12'
 
 @app.get('/healthz', include_in_schema=False)
 def healthz():
@@ -134,4 +134,8 @@ def healthz():
         'submission_register': True,
         'college_direct_revision_workflow': True,
         'college_email_reviewer_assignment': True,
+        'review_material_email_attachments': True,
+        'applicant_review_report_download': True,
+        'applicant_reviewer_privacy': True,
+        'college_revision_reviewer_disposition': True,
     })

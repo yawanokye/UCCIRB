@@ -351,6 +351,20 @@ class ReviewAssignmentBatchItem(Base):
     assignment = relationship("ReviewerAssignment")
 
 
+class ReviewAssignmentDocument(Base):
+    """Application documents explicitly selected by an assigning office for one reviewer assignment."""
+    __tablename__ = "review_assignment_documents"
+    __table_args__ = (UniqueConstraint("assignment_id", "document_id", name="uq_review_assignment_document"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uuid4_str)
+    assignment_id: Mapped[str] = mapped_column(ForeignKey("reviewer_assignments.id"), index=True)
+    document_id: Mapped[str] = mapped_column(ForeignKey("application_documents.id"), index=True)
+    selected_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    assignment = relationship("ReviewerAssignment")
+    document = relationship("ApplicationDocument")
+
+
 class ReviewReportDocument(Base):
     """Files submitted by a scientific or IRB reviewer for one assigned application."""
     __tablename__ = "review_report_documents"
