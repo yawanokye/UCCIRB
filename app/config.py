@@ -24,3 +24,11 @@ ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx", ".xls", ".xlsx"}
 BOOTSTRAP_ADMIN_EMAIL = os.getenv("BOOTSTRAP_ADMIN_EMAIL", "").strip().lower()
 BOOTSTRAP_ADMIN_NAME = os.getenv("BOOTSTRAP_ADMIN_NAME", "System Administrator").strip()
 BOOTSTRAP_ADMIN_PASSWORD = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "")
+
+# Reviewer assignment delivery, adapted from the academic submission portal.
+GMAIL_CLIENT_ID = os.getenv('GMAIL_CLIENT_ID', '').strip()
+GMAIL_CLIENT_SECRET = os.getenv('GMAIL_CLIENT_SECRET', '').strip()
+GMAIL_REFRESH_TOKEN = os.getenv('GMAIL_REFRESH_TOKEN', '').strip()
+GMAIL_SENDER_EMAIL = os.getenv('GMAIL_SENDER_EMAIL', '').strip()
+REVIEW_ASSIGNMENT_LINK_EXPIRY_DAYS = int(os.getenv('REVIEW_ASSIGNMENT_LINK_EXPIRY_DAYS', '30'))
+MAX_REVIEWERS_PER_APPLICATION = int(os.getenv('MAX_REVIEWERS_PER_APPLICATION', '3'))

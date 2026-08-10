@@ -307,3 +307,57 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(120))
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class ReviewAssignmentBatch(Base):
+    """One secure reviewer workspace can carry one or many application assignments."""
+    __tablename__ = "review_assignment_batches"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uuid4_str)
+    reference: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    reviewer_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    level: Mapped[str] = mapped_column(String(30), index=True)  # college | irb
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    link_expires_at: Mapped[datetime] = mapped_column(DateTime)
+    due_at: Mapped[datetime] = mapped_column(DateTime)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    email_status: Mapped[str] = mapped_column(String(30), default="pending")
+    last_email_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_accessed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    access_count: Mapped[int] = mapped_column(Integer, default=0)
+    resend_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    reviewer = relationship("User", foreign_keys=[reviewer_id])
+    items = relationship("ReviewAssignmentBatchItem", back_populates="batch", cascade="all, delete-orphan")
+
+
+class ReviewAssignmentBatchItem(Base):
+    __tablename__ = "review_assignment_batch_items"
+    __table_args__ = (
+        UniqueConstraint("batch_id", "assignment_id", name="uq_review_batch_item"),
+        UniqueConstraint("assignment_id", name="uq_review_assignment_in_batch"),
+    )
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uuid4_str)
+    batch_id: Mapped[str] = mapped_column(ForeignKey("review_assignment_batches.id"), index=True)
+    assignment_id: Mapped[str] = mapped_column(ForeignKey("reviewer_assignments.id"), index=True)
+    work_no: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    batch = relationship("ReviewAssignmentBatch", back_populates="items")
+    assignment = relationship("ReviewerAssignment")
+
+
+class ReviewReportDocument(Base):
+    """Files submitted by a scientific or IRB reviewer for one assigned application."""
+    __tablename__ = "review_report_documents"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uuid4_str)
+    assignment_id: Mapped[str] = mapped_column(ForeignKey("reviewer_assignments.id"), index=True)
+    document_kind: Mapped[str] = mapped_column(String(40))  # review_report | annotated_protocol | supporting
+    original_name: Mapped[str] = mapped_column(String(255))
+    stored_name: Mapped[str] = mapped_column(String(255), unique=True)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    assignment = relationship("ReviewerAssignment")
