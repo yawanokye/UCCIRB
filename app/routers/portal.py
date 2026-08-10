@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import hashlib
+import io
 import secrets
 import string
+import zipfile
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
-from ..config import CLEARANCE_VALIDITY_DAYS, REVIEW_DUE_DAYS
+from ..config import (CLEARANCE_VALIDITY_DAYS, REVIEW_DUE_DAYS, PUBLIC_BASE_URL,
+                      REVIEW_ASSIGNMENT_LINK_EXPIRY_DAYS, MAX_REVIEWERS_PER_APPLICATION)
 from ..database import get_db
 from ..models import (
     AppStatus,
@@ -26,6 +30,9 @@ from ..models import (
     IRBMeetingItem,
     PostApprovalRequest,
     ReviewAssignmentMeta,
+    ReviewAssignmentBatch,
+    ReviewAssignmentBatchItem,
+    ReviewReportDocument,
     ReviewerAssignment,
     ReviewerDeclaration,
     Role,
@@ -34,6 +41,7 @@ from ..models import (
 )
 from ..services.auth import hash_password, require_roles, require_user
 from ..services.certificate import certificate_path, generate_certificate_pdf
+from ..services.email import gmail_configured, review_assignment_email
 from ..services.storage import save_upload, storage_path
 from ..services.workflow import audit, transition
 from ..services.routing import (
@@ -176,6 +184,143 @@ def reviewer_workload(db: Session, reviewers):
     return result
 
 
+def review_token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode('utf-8')).hexdigest()
+
+
+def new_review_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def next_review_batch_reference(db: Session, level: str) -> str:
+    year = datetime.utcnow().year
+    prefix = 'CSC' if level == 'college' else 'IRB'
+    count = db.scalar(select(func.count(ReviewAssignmentBatch.id))) or 0
+    return f'UCC-{prefix}-REV-{year}-{count + 1:05d}'
+
+
+def get_review_batch_by_token(db: Session, token: str):
+    return db.scalar(
+        select(ReviewAssignmentBatch)
+        .options(joinedload(ReviewAssignmentBatch.reviewer), joinedload(ReviewAssignmentBatch.items))
+        .where(ReviewAssignmentBatch.token_hash == review_token_hash(token))
+    )
+
+
+def validate_review_batch(batch: ReviewAssignmentBatch | None):
+    if not batch:
+        return False, 404, 'This secure review assignment link is invalid.'
+    if batch.revoked_at:
+        return False, 410, 'This secure review assignment link has been revoked.'
+    if batch.link_expires_at < datetime.utcnow():
+        return False, 410, 'This secure review assignment link has expired. Please contact the assigning office.'
+    return True, 200, ''
+
+
+def report_documents_map(db: Session, assignments):
+    ids = [a.id for a in assignments]
+    result = {a.id: [] for a in assignments}
+    if not ids:
+        return result
+    for doc in db.scalars(
+        select(ReviewReportDocument)
+        .where(ReviewReportDocument.assignment_id.in_(ids))
+        .order_by(ReviewReportDocument.uploaded_at)
+    ).all():
+        result.setdefault(doc.assignment_id, []).append(doc)
+    return result
+
+
+def complete_review_assignment(db: Session, assignment: ReviewerAssignment, actor_id: str,
+                               recommendation: str, comments: str):
+    assignment.recommendation = recommendation
+    assignment.comments = comments
+    assignment.status = 'completed'
+    assignment.completed_at = datetime.utcnow()
+    app = get_app_or_404(db, assignment.application_id)
+    db.flush()
+
+    pending = db.scalar(
+        select(func.count(ReviewerAssignment.id)).where(
+            ReviewerAssignment.application_id == app.id,
+            ReviewerAssignment.level == assignment.level,
+            ReviewerAssignment.status.in_(['assigned', 'accepted']),
+        )
+    ) or 0
+
+    if pending == 0:
+        if assignment.level == 'college':
+            transition(db, app, AppStatus.AWAITING_COLLEGE_DECISION.value, actor_id, 'College scientific review round completed')
+        else:
+            milestone = db.scalar(
+                select(StatusHistory)
+                .where(
+                    StatusHistory.application_id == app.id,
+                    StatusHistory.to_status.in_([AppStatus.AWAITING_IRB_REVIEWER.value, AppStatus.IRB_REVISED.value]),
+                )
+                .order_by(StatusHistory.created_at.desc())
+            )
+            round_start = milestone.created_at if milestone else datetime.min
+            current = db.scalars(
+                select(ReviewerAssignment).where(
+                    ReviewerAssignment.application_id == app.id,
+                    ReviewerAssignment.level == 'irb',
+                    ReviewerAssignment.assigned_at >= round_start,
+                    ReviewerAssignment.status == 'completed',
+                )
+            ).all()
+            recs = {x.recommendation for x in current}
+            classification = latest_classification(db, app.id)
+            if 'minor_revision' in recs or 'major_revision' in recs:
+                transition(db, app, AppStatus.IRB_REVISION.value, actor_id, 'IRB ethical review requires applicant revision')
+            elif (classification and classification.classification == 'full_board') or 'full_board' in recs:
+                transition(db, app, AppStatus.FULL_BOARD.value, actor_id, 'Application requires Full Board consideration')
+            else:
+                transition(db, app, AppStatus.AWAITING_FINAL_DECISION.value, actor_id, 'IRB review completed; awaiting authorised final decision')
+
+    audit(db, actor_id, 'review_submitted', app.id, f'{assignment.level}: {recommendation}')
+    return app
+
+
+def current_review_round_start(db: Session, app_id: str, level: str) -> datetime:
+    milestones = (
+        [AppStatus.AWAITING_COLLEGE_REVIEWER.value, AppStatus.COLLEGE_REVISED.value]
+        if level == 'college'
+        else [AppStatus.AWAITING_IRB_REVIEWER.value, AppStatus.IRB_REVISED.value]
+    )
+    milestone = db.scalar(
+        select(StatusHistory)
+        .where(StatusHistory.application_id == app_id, StatusHistory.to_status.in_(milestones))
+        .order_by(StatusHistory.created_at.desc())
+    )
+    return milestone.created_at if milestone else datetime.min
+
+
+def assignment_count_for_application(db: Session, app_id: str, level: str) -> int:
+    round_start = current_review_round_start(db, app_id, level)
+    return db.scalar(
+        select(func.count(ReviewerAssignment.id)).where(
+            ReviewerAssignment.application_id == app_id,
+            ReviewerAssignment.level == level,
+            ReviewerAssignment.assigned_at >= round_start,
+            ReviewerAssignment.status.in_(['assigned', 'accepted', 'completed']),
+        )
+    ) or 0
+
+
+def active_duplicate_assignment(db: Session, app_id: str, reviewer_id: str, level: str):
+    round_start = current_review_round_start(db, app_id, level)
+    return db.scalar(
+        select(ReviewerAssignment.id).where(
+            ReviewerAssignment.application_id == app_id,
+            ReviewerAssignment.reviewer_id == reviewer_id,
+            ReviewerAssignment.level == level,
+            ReviewerAssignment.assigned_at >= round_start,
+            ReviewerAssignment.status.in_(['assigned', 'accepted', 'completed']),
+        )
+    )
+
+
 def issue_clearance(db: Session, app: EthicsApplication, issuer: User, conditions: str | None = None):
     year = datetime.utcnow().year
     seq = (db.scalar(select(func.count(ClearanceCertificate.id)).where(func.extract('year', ClearanceCertificate.issue_date) == year)) or 0) + 1
@@ -197,8 +342,30 @@ def issue_clearance(db: Session, app: EthicsApplication, issuer: User, condition
 
 
 @router.get('/')
-def home(request: Request):
-    return request.app.state.templates.TemplateResponse(request, 'home.html', {})
+def home(request: Request, db: Session = Depends(get_db)):
+    user = None
+    user_id = request.session.get('user_id')
+    if user_id:
+        candidate = db.get(User, user_id)
+        if candidate and candidate.active:
+            user = candidate
+    return request.app.state.templates.TemplateResponse(request, 'home.html', ctx(request, user))
+
+
+@router.get('/applicant-guide')
+def applicant_guide(request: Request, db: Session = Depends(get_db)):
+    user = None
+    user_id = request.session.get('user_id')
+    if user_id:
+        candidate = db.get(User, user_id)
+        if candidate and candidate.active:
+            user = candidate
+    return request.app.state.templates.TemplateResponse(request, 'applicant_guide.html', ctx(request, user))
+
+
+@router.get('/resources')
+def resources_redirect():
+    return RedirectResponse('/applicant-guide#resources', status_code=303)
 
 
 @router.get('/verify/{token}')
@@ -499,6 +666,7 @@ def application_detail(request: Request, app_id: str, db: Session = Depends(get_
     ).all()
     declarations = declaration_map(db, assignments)
     assignment_meta = assignment_meta_map(db, assignments)
+    report_documents = report_documents_map(db, assignments)
 
     college_reviewers = []
     irb_reviewers = []
@@ -553,6 +721,7 @@ def application_detail(request: Request, app_id: str, db: Session = Depends(get_
             assignments=assignments,
             declarations=declarations,
             assignment_meta=assignment_meta,
+            report_documents=report_documents,
             college_reviewers=college_reviewers,
             irb_reviewers=irb_reviewers,
             reviewer_workload=reviewer_workload(db, irb_reviewers or college_reviewers),
@@ -617,9 +786,24 @@ def submit_application(request: Request, app_id: str, db: Session = Depends(get_
     if app.status not in {AppStatus.DRAFT.value, AppStatus.RETURNED_ADMIN.value}:
         raise HTTPException(400, 'Application cannot be submitted from its current state')
     docs = db.scalars(select(ApplicationDocument).where(ApplicationDocument.application_id == app.id)).all()
-    required = {'Research Protocol', 'Data Collection Instrument', 'Supervisor Approval'} if app.applicant_type.lower() == 'student' else {'Research Protocol', 'Data Collection Instrument'}
     present = {d.document_type for d in docs}
-    missing = required - present
+
+    # Core completeness rules are based on the current UCC-IRB application instructions.
+    # Study-specific items such as consent/assent and data collection instruments remain
+    # subject to the nature of the study and are also checked during Secretariat screening.
+    missing = set()
+    if not ({'Research Protocol', 'Completed UCC-IRB Composite Form'} & present):
+        missing.add('Research Protocol / Completed UCC-IRB Composite Form')
+    required = {'Application Letter', 'Similarity Report', 'Applicant Abridged CV'}
+    if app.applicant_type.lower() == 'student':
+        required.update({'Supervisor Approval', 'Head of Unit Support Letter', 'Supervisor Abridged CV'})
+    missing.update(required - present)
+
+    # The Composite Form contains the UCC-IRB checklist. When applicants upload a separate
+    # protocol instead, require the completed checklist as an additional document.
+    if 'Completed UCC-IRB Composite Form' not in present and 'Completed IRB Checklist' not in present:
+        missing.add('Completed IRB Checklist')
+
     if missing:
         raise HTTPException(400, f'Missing required document(s): {", ".join(sorted(missing))}')
     if not app.reference_no:
@@ -834,6 +1018,9 @@ def submit_review(
     assignment_id: str,
     recommendation: str = Form(...),
     comments: str = Form(...),
+    report_file: UploadFile = File(...),
+    annotated_protocol: UploadFile | None = File(None),
+    supporting_file: UploadFile | None = File(None),
     db: Session = Depends(get_db),
 ):
     user = require_user(request, db)
@@ -843,55 +1030,35 @@ def submit_review(
     declaration = db.scalar(select(ReviewerDeclaration).where(ReviewerDeclaration.assignment_id == assignment.id))
     if not declaration or declaration.declaration != 'clear':
         raise HTTPException(400, 'Submit a no-conflict declaration before completing the review.')
-    assignment.recommendation = recommendation
-    assignment.comments = comments
-    assignment.status = 'completed'
-    assignment.completed_at = datetime.utcnow()
+
+    allowed = (
+        {'scientifically_recommended', 'minor_revision', 'major_revision', 'specialist_review', 'not_recommended'}
+        if assignment.level == 'college'
+        else {'approve', 'approve_conditions', 'minor_revision', 'major_revision', 'full_board', 'reject'}
+    )
+    if recommendation not in allowed:
+        raise HTTPException(400, 'Select a valid review recommendation.')
+    if not comments.strip():
+        raise HTTPException(400, 'Review comments are required.')
+
     app = get_app_or_404(db, assignment.application_id)
-    # Session autoflush is disabled, so flush the completed assignment before counting
-    # active reviewers in the current review round.
-    db.flush()
+    uploads = [
+        ('review_report', report_file),
+        ('annotated_protocol', annotated_protocol),
+        ('supporting', supporting_file),
+    ]
+    for kind, upload in uploads:
+        if not upload or not upload.filename:
+            continue
+        stored, original = save_upload(upload, app.id)
+        db.add(ReviewReportDocument(
+            assignment_id=assignment.id,
+            document_kind=kind,
+            original_name=original,
+            stored_name=stored,
+        ))
 
-    pending = db.scalar(
-        select(func.count(ReviewerAssignment.id)).where(
-            ReviewerAssignment.application_id == app.id,
-            ReviewerAssignment.level == assignment.level,
-            ReviewerAssignment.status.in_(['assigned', 'accepted']),
-        )
-    ) or 0
-
-    if pending == 0:
-        if assignment.level == 'college':
-            transition(db, app, AppStatus.AWAITING_COLLEGE_DECISION.value, user.id, 'College scientific review round completed')
-        else:
-            # Only use recommendations from the current active IRB review round.
-            milestone = db.scalar(
-                select(StatusHistory)
-                .where(
-                    StatusHistory.application_id == app.id,
-                    StatusHistory.to_status.in_([AppStatus.AWAITING_IRB_REVIEWER.value, AppStatus.IRB_REVISED.value]),
-                )
-                .order_by(StatusHistory.created_at.desc())
-            )
-            round_start = milestone.created_at if milestone else datetime.min
-            current = db.scalars(
-                select(ReviewerAssignment).where(
-                    ReviewerAssignment.application_id == app.id,
-                    ReviewerAssignment.level == 'irb',
-                    ReviewerAssignment.assigned_at >= round_start,
-                    ReviewerAssignment.status == 'completed',
-                )
-            ).all()
-            recs = {x.recommendation for x in current}
-            classification = latest_classification(db, app.id)
-            if 'minor_revision' in recs or 'major_revision' in recs:
-                transition(db, app, AppStatus.IRB_REVISION.value, user.id, 'IRB ethical review requires applicant revision')
-            elif (classification and classification.classification == 'full_board') or 'full_board' in recs:
-                transition(db, app, AppStatus.FULL_BOARD.value, user.id, 'Application requires Full Board consideration')
-            else:
-                transition(db, app, AppStatus.AWAITING_FINAL_DECISION.value, user.id, 'IRB review completed; awaiting authorised final decision')
-
-    audit(db, user.id, 'review_submitted', app.id, f'{assignment.level}: {recommendation}')
+    complete_review_assignment(db, assignment, user.id, recommendation, comments.strip())
     db.commit()
     return RedirectResponse(f'/applications/{app.id}', status_code=303)
 
@@ -1276,3 +1443,575 @@ def download_document(request: Request, document_id: str, db: Session = Depends(
     audit(db, user.id, 'document_downloaded', app.id, doc.original_name)
     db.commit()
     return FileResponse(path, filename=doc.original_name)
+
+# ---------------------------------------------------------------------------
+# Phase 2B: secure reviewer-assignment workflow, adapted from the academic
+# submission portal. One batch link can contain several applications, while
+# each application is declared, downloaded and reviewed separately.
+# ---------------------------------------------------------------------------
+
+def _review_queue_data(db: Session, user: User, level: str):
+    if level == 'college':
+        require_roles(user, Role.COLLEGE_ADMIN.value)
+        statuses = [
+            AppStatus.AWAITING_COLLEGE_REVIEWER.value,
+            AppStatus.COLLEGE_REVIEW.value,
+            AppStatus.COLLEGE_REVISED.value,
+        ]
+        apps = db.scalars(
+            select(EthicsApplication)
+            .options(joinedload(EthicsApplication.applicant), joinedload(EthicsApplication.college))
+            .where(EthicsApplication.college_id == user.college_id, EthicsApplication.status.in_(statuses))
+            .order_by(EthicsApplication.updated_at.desc())
+        ).unique().all()
+        reviewers = db.scalars(
+            select(User).where(
+                User.role == Role.COLLEGE_REVIEWER.value,
+                User.college_id == user.college_id,
+                User.active == True,
+            ).order_by(User.full_name)
+        ).all()
+        batches = db.scalars(
+            select(ReviewAssignmentBatch)
+            .options(joinedload(ReviewAssignmentBatch.reviewer), joinedload(ReviewAssignmentBatch.items))
+            .where(ReviewAssignmentBatch.level == 'college')
+            .order_by(ReviewAssignmentBatch.created_at.desc())
+        ).unique().all()
+        batches = [b for b in batches if b.reviewer and b.reviewer.college_id == user.college_id][:50]
+    else:
+        require_roles(user, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value)
+        statuses = [
+            AppStatus.AWAITING_IRB_REVIEWER.value,
+            AppStatus.IRB_REVIEW.value,
+            AppStatus.IRB_REVISED.value,
+        ]
+        apps = db.scalars(
+            select(EthicsApplication)
+            .options(joinedload(EthicsApplication.applicant), joinedload(EthicsApplication.college))
+            .where(EthicsApplication.status.in_(statuses))
+            .order_by(EthicsApplication.updated_at.desc())
+        ).unique().all()
+        reviewers = db.scalars(
+            select(User).where(User.role == Role.IRB_REVIEWER.value, User.active == True).order_by(User.full_name)
+        ).all()
+        batches = db.scalars(
+            select(ReviewAssignmentBatch)
+            .options(joinedload(ReviewAssignmentBatch.reviewer), joinedload(ReviewAssignmentBatch.items))
+            .where(ReviewAssignmentBatch.level == 'irb')
+            .order_by(ReviewAssignmentBatch.created_at.desc())
+        ).unique().all()[:50]
+
+    counts = {a.id: assignment_count_for_application(db, a.id, level) for a in apps}
+    workloads = reviewer_workload(db, reviewers)
+    batch_stats = {}
+    for b in batches:
+        assignment_ids = [i.assignment_id for i in b.items]
+        rows = db.scalars(select(ReviewerAssignment).where(ReviewerAssignment.id.in_(assignment_ids))).all() if assignment_ids else []
+        batch_stats[b.id] = {
+            'total': len(rows),
+            'completed': sum(1 for x in rows if x.status == 'completed'),
+            'declined': sum(1 for x in rows if x.status == 'declined'),
+            'pending': sum(1 for x in rows if x.status in {'assigned', 'accepted'}),
+        }
+    return apps, reviewers, batches, counts, workloads, batch_stats
+
+
+def _render_review_queue(request: Request, db: Session, user: User, level: str):
+    apps, reviewers, batches, counts, workloads, batch_stats = _review_queue_data(db, user, level)
+    return request.app.state.templates.TemplateResponse(
+        request,
+        'review_queue.html',
+        ctx(
+            request,
+            user,
+            level=level,
+            apps=apps,
+            reviewers=reviewers,
+            batches=batches,
+            assignment_counts=counts,
+            reviewer_workload=workloads,
+            batch_stats=batch_stats,
+            max_reviewers=MAX_REVIEWERS_PER_APPLICATION,
+            default_due_days=REVIEW_DUE_DAYS,
+            email_ready=gmail_configured(),
+            error=None,
+        ),
+    )
+
+
+@router.get('/college/review-queue')
+def college_review_queue(request: Request, db: Session = Depends(get_db)):
+    user = require_user(request, db)
+    return _render_review_queue(request, db, user, 'college')
+
+
+@router.get('/irb/review-queue')
+def irb_review_queue(request: Request, db: Session = Depends(get_db)):
+    user = require_user(request, db)
+    return _render_review_queue(request, db, user, 'irb')
+
+
+def _base_url(request: Request) -> str:
+    if PUBLIC_BASE_URL and 'localhost' not in PUBLIC_BASE_URL:
+        return PUBLIC_BASE_URL.rstrip('/')
+    return str(request.base_url).rstrip('/')
+
+
+@router.post('/review-batches/assign')
+def assign_review_batch(
+    request: Request,
+    level: str = Form(...),
+    reviewer_id: str = Form(...),
+    application_ids: list[str] = Form(...),
+    assignment_type: str = Form('primary'),
+    due_days: int = Form(REVIEW_DUE_DAYS),
+    message: str = Form(''),
+    db: Session = Depends(get_db),
+):
+    user = require_user(request, db)
+    if level not in {'college', 'irb'}:
+        raise HTTPException(400, 'Invalid review level.')
+    apps, reviewers, _, _, _, _ = _review_queue_data(db, user, level)
+    reviewer = next((r for r in reviewers if r.id == reviewer_id), None)
+    if not reviewer:
+        raise HTTPException(400, 'Select an active reviewer available to this review level.')
+
+    ids = list(dict.fromkeys(application_ids))
+    if not ids:
+        raise HTTPException(400, 'Select at least one application.')
+    eligible = {a.id: a for a in apps}
+    selected = [eligible.get(i) for i in ids]
+    if any(a is None for a in selected):
+        raise HTTPException(400, 'One or more selected applications are not available in this review queue.')
+
+    problems = []
+    for app in selected:
+        if active_duplicate_assignment(db, app.id, reviewer.id, level):
+            problems.append(f'{app.reference_no}: reviewer already assigned in this review round')
+        elif assignment_count_for_application(db, app.id, level) >= MAX_REVIEWERS_PER_APPLICATION:
+            problems.append(f'{app.reference_no}: maximum of {MAX_REVIEWERS_PER_APPLICATION} reviewers reached')
+    if problems:
+        raise HTTPException(400, '; '.join(problems[:10]))
+
+    due_days = max(1, min(int(due_days), 90))
+    now = datetime.utcnow()
+    due_at = now + timedelta(days=due_days)
+    link_days = max(REVIEW_ASSIGNMENT_LINK_EXPIRY_DAYS, due_days + 7)
+    link_expires_at = now + timedelta(days=link_days)
+    token = new_review_token()
+    batch = ReviewAssignmentBatch(
+        reference=next_review_batch_reference(db, level),
+        reviewer_id=reviewer.id,
+        level=level,
+        token_hash=review_token_hash(token),
+        link_expires_at=link_expires_at,
+        due_at=due_at,
+        message=message.strip()[:4000] or None,
+        email_status='pending',
+        created_by=user.id,
+    )
+    db.add(batch)
+    db.flush()
+
+    for idx, app in enumerate(selected, start=1):
+        assignment = ReviewerAssignment(
+            application_id=app.id,
+            reviewer_id=reviewer.id,
+            level=level,
+            assignment_type=assignment_type,
+            status='assigned',
+            assigned_by=user.id,
+        )
+        db.add(assignment)
+        db.flush()
+        db.add(ReviewAssignmentMeta(assignment_id=assignment.id, due_at=due_at))
+        db.add(ReviewAssignmentBatchItem(batch_id=batch.id, assignment_id=assignment.id, work_no=idx))
+        if level == 'college':
+            if app.status != AppStatus.COLLEGE_REVIEW.value:
+                transition(db, app, AppStatus.COLLEGE_REVIEW.value, user.id, f'Assigned scientific review to {reviewer.full_name}')
+        else:
+            if app.status != AppStatus.IRB_REVIEW.value:
+                transition(db, app, AppStatus.IRB_REVIEW.value, user.id, f'Assigned IRB ethical review to {reviewer.full_name}')
+        audit(db, user.id, 'reviewer_assignment_created', app.id, f'{batch.reference} | {reviewer.full_name} | {level}')
+
+    db.commit()
+    secure_url = f'{_base_url(request)}/secure/reviews/{token}'
+    delivery_message = None
+    try:
+        if not gmail_configured():
+            batch.email_status = 'not_configured'
+            delivery_message = 'Email is not configured. Copy the secure link shown below and send it to the reviewer through an approved institutional channel.'
+        else:
+            review_assignment_email(
+                reviewer_name=reviewer.full_name,
+                reviewer_email=reviewer.email,
+                level=level,
+                count=len(selected),
+                secure_url=secure_url,
+                due_at=due_at,
+                link_expires_at=link_expires_at,
+                message=message.strip(),
+            )
+            batch.email_status = 'sent'
+            batch.sent_at = datetime.utcnow()
+    except Exception as exc:
+        batch.email_status = 'failed'
+        batch.last_email_error = str(exc)[:1000]
+        delivery_message = f'The assignments were saved, but email delivery failed: {exc}. Copy the secure link below and send it through an approved institutional channel.'
+    db.commit()
+
+    return _render_review_batch_detail(request, db, user, batch, secure_url=secure_url if batch.email_status != 'sent' else None, notice=delivery_message or 'Assignment created and secure review invitation sent.')
+
+
+def _get_batch_or_404(db: Session, batch_id: str):
+    batch = db.scalar(
+        select(ReviewAssignmentBatch)
+        .options(joinedload(ReviewAssignmentBatch.reviewer), joinedload(ReviewAssignmentBatch.items))
+        .where(ReviewAssignmentBatch.id == batch_id)
+    )
+    if not batch:
+        raise HTTPException(404, 'Review assignment batch not found.')
+    return batch
+
+
+def _can_manage_batch(user: User, batch: ReviewAssignmentBatch) -> bool:
+    if user.role == Role.SUPERADMIN.value:
+        return True
+    if batch.level == 'irb':
+        return user.role in {Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value}
+    return user.role == Role.COLLEGE_ADMIN.value and batch.reviewer and user.college_id == batch.reviewer.college_id
+
+
+def _render_review_batch_detail(request: Request, db: Session, user: User, batch: ReviewAssignmentBatch,
+                                secure_url: str | None = None, notice: str | None = None):
+    if not _can_manage_batch(user, batch):
+        raise HTTPException(403)
+    items = db.scalars(
+        select(ReviewAssignmentBatchItem)
+        .options(
+            joinedload(ReviewAssignmentBatchItem.assignment).joinedload(ReviewerAssignment.application).joinedload(EthicsApplication.applicant)
+        )
+        .where(ReviewAssignmentBatchItem.batch_id == batch.id)
+        .order_by(ReviewAssignmentBatchItem.work_no)
+    ).unique().all()
+    declarations = declaration_map(db, [i.assignment for i in items])
+    reports = report_documents_map(db, [i.assignment for i in items])
+    return request.app.state.templates.TemplateResponse(
+        request,
+        'review_batch_detail.html',
+        ctx(request, user, batch=batch, items=items, declarations=declarations, reports=reports, secure_url=secure_url, notice=notice, now=datetime.utcnow()),
+    )
+
+
+@router.get('/review-batches/{batch_id}')
+def review_batch_detail(request: Request, batch_id: str, db: Session = Depends(get_db)):
+    user = require_user(request, db)
+    batch = _get_batch_or_404(db, batch_id)
+    return _render_review_batch_detail(request, db, user, batch)
+
+
+@router.post('/review-batches/{batch_id}/resend')
+def resend_review_batch(request: Request, batch_id: str, db: Session = Depends(get_db)):
+    user = require_user(request, db)
+    batch = _get_batch_or_404(db, batch_id)
+    if not _can_manage_batch(user, batch):
+        raise HTTPException(403)
+    if batch.revoked_at:
+        raise HTTPException(400, 'A revoked assignment cannot be resent. Create a new assignment instead.')
+    if not gmail_configured():
+        raise HTTPException(503, 'Gmail delivery is not configured.')
+
+    token = new_review_token()
+    batch.token_hash = review_token_hash(token)
+    batch.link_expires_at = datetime.utcnow() + timedelta(days=max(REVIEW_ASSIGNMENT_LINK_EXPIRY_DAYS, 7))
+    secure_url = f'{_base_url(request)}/secure/reviews/{token}'
+    try:
+        review_assignment_email(
+            reviewer_name=batch.reviewer.full_name,
+            reviewer_email=batch.reviewer.email,
+            level=batch.level,
+            count=len(batch.items),
+            secure_url=secure_url,
+            due_at=batch.due_at,
+            link_expires_at=batch.link_expires_at,
+            message=batch.message or '',
+        )
+        batch.email_status = 'sent'
+        batch.sent_at = datetime.utcnow()
+        batch.resend_count += 1
+        batch.last_email_error = None
+        audit(db, user.id, 'review_assignment_link_resent', None, batch.reference)
+        db.commit()
+        return RedirectResponse(f'/review-batches/{batch.id}', status_code=303)
+    except Exception as exc:
+        batch.email_status = 'failed'
+        batch.last_email_error = str(exc)[:1000]
+        db.commit()
+        return _render_review_batch_detail(request, db, user, batch, secure_url=secure_url, notice=f'Email delivery failed: {exc}. The regenerated secure link is shown below.')
+
+
+@router.post('/review-batches/{batch_id}/revoke')
+def revoke_review_batch(request: Request, batch_id: str, db: Session = Depends(get_db)):
+    user = require_user(request, db)
+    batch = _get_batch_or_404(db, batch_id)
+    if not _can_manage_batch(user, batch):
+        raise HTTPException(403)
+    if batch.revoked_at:
+        return RedirectResponse(f'/review-batches/{batch.id}', status_code=303)
+    batch.revoked_at = datetime.utcnow()
+    batch.email_status = 'revoked'
+    items = db.scalars(select(ReviewAssignmentBatchItem).where(ReviewAssignmentBatchItem.batch_id == batch.id)).all()
+    affected_apps = set()
+    for item in items:
+        assignment = db.get(ReviewerAssignment, item.assignment_id)
+        if assignment and assignment.status in {'assigned', 'accepted'}:
+            assignment.status = 'revoked'
+            affected_apps.add((assignment.application_id, assignment.level))
+    db.flush()
+    for app_id, level in affected_apps:
+        app = get_app_or_404(db, app_id)
+        remaining = db.scalar(
+            select(func.count(ReviewerAssignment.id)).where(
+                ReviewerAssignment.application_id == app_id,
+                ReviewerAssignment.level == level,
+                ReviewerAssignment.status.in_(['assigned', 'accepted']),
+            )
+        ) or 0
+        if remaining == 0:
+            target = AppStatus.AWAITING_COLLEGE_REVIEWER.value if level == 'college' else AppStatus.AWAITING_IRB_REVIEWER.value
+            transition(db, app, target, user.id, f'{batch.reference} revoked; reassignment required')
+    audit(db, user.id, 'review_assignment_batch_revoked', None, batch.reference)
+    db.commit()
+    return RedirectResponse(f'/review-batches/{batch.id}', status_code=303)
+
+
+def _batch_item_assignment(db: Session, batch: ReviewAssignmentBatch, assignment_id: str):
+    item = db.scalar(
+        select(ReviewAssignmentBatchItem).where(
+            ReviewAssignmentBatchItem.batch_id == batch.id,
+            ReviewAssignmentBatchItem.assignment_id == assignment_id,
+        )
+    )
+    if not item:
+        raise HTTPException(403, 'This application is not part of the secure assignment.')
+    assignment = db.scalar(
+        select(ReviewerAssignment)
+        .options(joinedload(ReviewerAssignment.application).joinedload(EthicsApplication.applicant), joinedload(ReviewerAssignment.application).joinedload(EthicsApplication.college))
+        .where(ReviewerAssignment.id == assignment_id)
+    )
+    if not assignment:
+        raise HTTPException(404, 'Assigned review not found.')
+    return item, assignment
+
+
+@router.get('/secure/reviews/{token}')
+def secure_review_workspace(request: Request, token: str, db: Session = Depends(get_db)):
+    batch = get_review_batch_by_token(db, token)
+    ok, status, message = validate_review_batch(batch)
+    if not ok:
+        return request.app.state.templates.TemplateResponse(request, 'secure_review_workspace.html', {'batch': None, 'error': message, 'request': request}, status_code=status)
+    batch.last_accessed_at = datetime.utcnow()
+    batch.access_count += 1
+    items = db.scalars(
+        select(ReviewAssignmentBatchItem)
+        .options(
+            joinedload(ReviewAssignmentBatchItem.assignment).joinedload(ReviewerAssignment.application).joinedload(EthicsApplication.applicant),
+            joinedload(ReviewAssignmentBatchItem.assignment).joinedload(ReviewerAssignment.application).joinedload(EthicsApplication.college),
+        )
+        .where(ReviewAssignmentBatchItem.batch_id == batch.id)
+        .order_by(ReviewAssignmentBatchItem.work_no)
+    ).unique().all()
+    assignments = [i.assignment for i in items]
+    declarations = declaration_map(db, assignments)
+    reports = report_documents_map(db, assignments)
+    db.commit()
+    return request.app.state.templates.TemplateResponse(
+        request,
+        'secure_review_workspace.html',
+        {
+            'request': request,
+            'batch': batch,
+            'items': items,
+            'declarations': declarations,
+            'reports': reports,
+            'token': token,
+            'error': None,
+            'now': datetime.utcnow(),
+        },
+        headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag': 'noindex, nofollow'},
+    )
+
+
+@router.post('/secure/reviews/{token}/items/{assignment_id}/declaration')
+def secure_review_declaration(
+    request: Request,
+    token: str,
+    assignment_id: str,
+    declaration: str = Form(...),
+    note: str = Form(''),
+    db: Session = Depends(get_db),
+):
+    batch = get_review_batch_by_token(db, token)
+    ok, status, message = validate_review_batch(batch)
+    if not ok:
+        raise HTTPException(status, message)
+    _, assignment = _batch_item_assignment(db, batch, assignment_id)
+    if assignment.status not in {'assigned', 'accepted'}:
+        raise HTTPException(409, 'This assigned review is no longer awaiting a declaration.')
+    if declaration not in {'clear', 'conflict'}:
+        raise HTTPException(400, 'Choose a valid conflict-of-interest declaration.')
+    existing = db.scalar(select(ReviewerDeclaration).where(ReviewerDeclaration.assignment_id == assignment.id))
+    if existing:
+        raise HTTPException(409, 'A conflict-of-interest declaration has already been recorded for this application.')
+    db.add(ReviewerDeclaration(assignment_id=assignment.id, declaration=declaration, note=note.strip() or None))
+    app = assignment.application
+    if declaration == 'clear':
+        assignment.status = 'accepted'
+        audit(db, batch.reviewer_id, 'reviewer_conflict_declaration_clear', app.id, f'Secure batch {batch.reference}')
+    else:
+        assignment.status = 'declined'
+        audit(db, batch.reviewer_id, 'reviewer_conflict_declared', app.id, note.strip() or f'Secure batch {batch.reference}')
+        db.flush()
+        remaining = db.scalar(
+            select(func.count(ReviewerAssignment.id)).where(
+                ReviewerAssignment.application_id == app.id,
+                ReviewerAssignment.level == assignment.level,
+                ReviewerAssignment.status.in_(['assigned', 'accepted']),
+            )
+        ) or 0
+        if remaining == 0:
+            target = AppStatus.AWAITING_COLLEGE_REVIEWER.value if assignment.level == 'college' else AppStatus.AWAITING_IRB_REVIEWER.value
+            transition(db, app, target, batch.reviewer_id, 'Reviewer declared a conflict; reassignment required')
+    db.commit()
+    return RedirectResponse(f'/secure/reviews/{token}', status_code=303)
+
+
+def _safe_zip_name(value: str) -> str:
+    cleaned = ''.join(c if c.isalnum() or c in ' ._-()' else '_' for c in (value or '')).strip()
+    return cleaned[:160] or 'document'
+
+
+@router.get('/secure/reviews/{token}/items/{assignment_id}/package')
+def secure_review_package(token: str, assignment_id: str, db: Session = Depends(get_db)):
+    batch = get_review_batch_by_token(db, token)
+    ok, status, message = validate_review_batch(batch)
+    if not ok:
+        raise HTTPException(status, message)
+    _, assignment = _batch_item_assignment(db, batch, assignment_id)
+    declaration = db.scalar(select(ReviewerDeclaration).where(ReviewerDeclaration.assignment_id == assignment.id))
+    if not declaration or declaration.declaration != 'clear':
+        raise HTTPException(403, 'Complete a no-conflict declaration before accessing research documents.')
+
+    app = assignment.application
+    docs = db.scalars(
+        select(ApplicationDocument)
+        .where(ApplicationDocument.application_id == app.id)
+        .order_by(ApplicationDocument.document_type, ApplicationDocument.version.desc())
+    ).all()
+    latest = {}
+    for doc in docs:
+        latest.setdefault(doc.document_type, doc)
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        summary = (
+            f'Application reference: {app.reference_no}\n'
+            f'Applicant: {app.applicant.full_name}\n'
+            f'Research title: {app.title}\n'
+            f'Affiliation: {app.college.name}\n'
+            f'Department/Unit: {app.department or "Not stated"}\n'
+            f'Review level: {assignment.level}\n'
+        )
+        zf.writestr('00 - Application Summary.txt', summary)
+        for idx, doc in enumerate(latest.values(), start=1):
+            path = storage_path(app.id, doc.stored_name)
+            if path.exists():
+                suffix = path.suffix or ''
+                label = _safe_zip_name(doc.document_type)
+                original_stem = _safe_zip_name(doc.original_name.rsplit('.', 1)[0])
+                zf.write(path, f'{idx:02d} - {label} - {original_stem}{suffix}')
+    buffer.seek(0)
+    headers = {
+        'Content-Disposition': f'attachment; filename="{_safe_zip_name(app.reference_no or app.id)}-review-package.zip"',
+        'Cache-Control': 'no-store',
+        'Referrer-Policy': 'no-referrer',
+    }
+    batch.last_accessed_at = datetime.utcnow()
+    batch.access_count += 1
+    db.commit()
+    return StreamingResponse(buffer, media_type='application/zip', headers=headers)
+
+
+@router.post('/secure/reviews/{token}/items/{assignment_id}/submit')
+def secure_review_submit(
+    token: str,
+    assignment_id: str,
+    recommendation: str = Form(...),
+    comments: str = Form(...),
+    report_file: UploadFile = File(...),
+    annotated_protocol: UploadFile | None = File(None),
+    supporting_file: UploadFile | None = File(None),
+    db: Session = Depends(get_db),
+):
+    batch = get_review_batch_by_token(db, token)
+    ok, status, message = validate_review_batch(batch)
+    if not ok:
+        raise HTTPException(status, message)
+    _, assignment = _batch_item_assignment(db, batch, assignment_id)
+    if assignment.status not in {'assigned', 'accepted'}:
+        raise HTTPException(409, 'A review for this application has already been submitted or the assignment is no longer active.')
+    declaration = db.scalar(select(ReviewerDeclaration).where(ReviewerDeclaration.assignment_id == assignment.id))
+    if not declaration or declaration.declaration != 'clear':
+        raise HTTPException(403, 'Complete the no-conflict declaration before submitting a review.')
+    allowed = (
+        {'scientifically_recommended', 'minor_revision', 'major_revision', 'specialist_review', 'not_recommended'}
+        if assignment.level == 'college'
+        else {'approve', 'approve_conditions', 'minor_revision', 'major_revision', 'full_board', 'reject'}
+    )
+    if recommendation not in allowed:
+        raise HTTPException(400, 'Select a valid review recommendation.')
+    if not comments.strip():
+        raise HTTPException(400, 'Review comments are required.')
+
+    app = assignment.application
+    uploads = [
+        ('review_report', report_file),
+        ('annotated_protocol', annotated_protocol),
+        ('supporting', supporting_file),
+    ]
+    for kind, upload in uploads:
+        if not upload or not upload.filename:
+            continue
+        stored, original = save_upload(upload, app.id)
+        db.add(ReviewReportDocument(
+            assignment_id=assignment.id,
+            document_kind=kind,
+            original_name=original,
+            stored_name=stored,
+        ))
+    complete_review_assignment(db, assignment, batch.reviewer_id, recommendation, comments.strip())
+    db.commit()
+    return RedirectResponse(f'/secure/reviews/{token}', status_code=303)
+
+
+@router.get('/review-reports/{document_id}/download')
+def download_review_report(request: Request, document_id: str, db: Session = Depends(get_db)):
+    user = require_user(request, db)
+    doc = db.get(ReviewReportDocument, document_id)
+    if not doc:
+        raise HTTPException(404, 'Review report file not found.')
+    assignment = get_assignment_or_404(db, doc.assignment_id)
+    app = assignment.application
+    allowed = False
+    if user.role in {Role.SUPERADMIN.value, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value}:
+        allowed = True
+    elif user.role == Role.COLLEGE_ADMIN.value and assignment.level == 'college' and user.college_id == app.college_id:
+        allowed = True
+    elif user.id == assignment.reviewer_id:
+        allowed = True
+    if not allowed:
+        raise HTTPException(403)
+    path = storage_path(app.id, doc.stored_name)
+    if not path.exists():
+        raise HTTPException(404, 'Review report file is unavailable.')
+    return FileResponse(path, filename=doc.original_name, headers={'Cache-Control': 'no-store'})
