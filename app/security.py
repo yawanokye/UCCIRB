@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import secrets
 import time
+import logging
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
@@ -26,6 +27,7 @@ from .models import SecurityEvent
 
 _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 _rate_buckets: dict[str, deque[float]] = defaultdict(deque)
+logger = logging.getLogger("ucc_irb.security")
 
 
 def client_ip(request: Request) -> str:
@@ -70,7 +72,7 @@ def log_security_event(
     db.commit()
 
 
-def login_locked(db: Session, request: Request, email: str) -> bool:
+def login_locked(db: Session, request: Request, email: str, include_ip: bool = True) -> bool:
     cutoff = datetime.utcnow() - timedelta(minutes=LOGIN_LOCKOUT_MINUTES)
     subject = email_hash(email)
     ip = ip_hash(request)
@@ -89,7 +91,9 @@ def login_locked(db: Session, request: Request, email: str) -> bool:
             SecurityEvent.created_at >= cutoff,
         )
     ) or 0
-    return account_failures >= LOGIN_MAX_FAILURES or ip_failures >= (LOGIN_MAX_FAILURES * 3)
+    if account_failures >= LOGIN_MAX_FAILURES:
+        return True
+    return include_ip and ip_failures >= (LOGIN_MAX_FAILURES * 3)
 
 
 def clear_login_failures(db: Session, request: Request, email: str):
@@ -111,14 +115,17 @@ def same_origin(request: Request) -> bool:
     referer = request.headers.get("referer")
     source = origin or referer
     if not source:
-        # Non-browser clients typically omit both. State-changing browser forms in current
-        # browsers normally send Origin or Referer. CSRF token remains the primary control.
         return True
     try:
         parsed = urlparse(source)
         source_host = parsed.netloc.lower()
-        request_host = request.headers.get("host", "").lower()
-        return hmac.compare_digest(source_host, request_host)
+        candidates = {
+            request.headers.get("host", "").lower(),
+            request.headers.get("x-forwarded-host", "").split(",")[0].strip().lower(),
+            request.url.netloc.lower(),
+        }
+        candidates.discard("")
+        return any(hmac.compare_digest(source_host, candidate) for candidate in candidates)
     except Exception:
         return False
 
@@ -127,8 +134,29 @@ async def csrf_protect(request: Request):
     token = ensure_csrf_token(request)
     if request.method in _SAFE_METHODS:
         return
+
+    # Public applicant authentication is intentionally lower-friction.
+    # Login and registration do not depend on a CSRF form token, because stale
+    # session cookies and campus/mobile proxy changes can otherwise block genuine
+    # applicants. We still require a same-origin browser submission, SameSite=Lax
+    # session cookies, password verification and login rate/lockout controls.
+    if request.url.path in {"/login", "/register"}:
+        if not same_origin(request):
+            logger.warning(
+                "Public auth same-origin rejection path=%s host=%s forwarded_host=%s origin=%s referer=%s",
+                request.url.path, request.headers.get("host"), request.headers.get("x-forwarded-host"),
+                request.headers.get("origin"), request.headers.get("referer"),
+            )
+            raise HTTPException(status_code=403, detail="Cross-site request blocked. Please open the portal directly and try again.")
+        return
+
     if not same_origin(request):
-        raise HTTPException(status_code=403, detail="Cross-site request blocked")
+        logger.warning(
+            "CSRF same-origin rejection path=%s host=%s forwarded_host=%s origin=%s referer=%s",
+            request.url.path, request.headers.get("host"), request.headers.get("x-forwarded-host"),
+            request.headers.get("origin"), request.headers.get("referer"),
+        )
+        raise HTTPException(status_code=403, detail="Cross-site request blocked. Refresh the page and try again.")
     header_token = request.headers.get("x-csrf-token")
     supplied = header_token
     if not supplied:
@@ -138,6 +166,10 @@ async def csrf_protect(request: Request):
         except Exception:
             supplied = None
     if not supplied or not hmac.compare_digest(str(supplied), token):
+        logger.warning(
+            "CSRF token rejection path=%s supplied=%s session_cookie=%s",
+            request.url.path, bool(supplied), bool(request.cookies.get("ucc_irb_session")),
+        )
         raise HTTPException(status_code=403, detail="Security token missing or invalid. Refresh the page and try again.")
 
 
@@ -166,6 +198,12 @@ async def request_rate_limit(request: Request, call_next):
         if path.startswith("/secure/reviews/"):
             limit = RATE_LIMIT_SECURE_REVIEW_PER_MINUTE
             scope = "secure-review"
+        elif path in {"/login", "/register"}:
+            # Many students may share a campus/proxy IP. Account-level login
+            # failure controls remain in force, so this only avoids false positives
+            # from a busy shared network.
+            limit = max(RATE_LIMIT_POSTS_PER_MINUTE, 300)
+            scope = "public-auth"
         else:
             limit = RATE_LIMIT_POSTS_PER_MINUTE
             scope = "post"
