@@ -1,3 +1,9 @@
+# V17 security compatibility update
+
+Build ID: `2026-08-10-no-origin-block-v17`
+
+V17 removes Origin/Referer same-origin blocking across the portal because reverse proxies and institutional networks can cause false 403 responses. Applicant login and registration remain low-friction. Protected workflow POST forms continue to use session-bound CSRF tokens, role checks, rate limiting, secure sessions, password hashing and audit/security logging.
+
 # V15 Login/CSRF Reliability Patch
 
 - Renders CSRF tokens directly inside applicant, administrative and system-admin login forms.
@@ -257,11 +263,16 @@ No additional Render environment variable is required for V12. Gmail attachment 
 
 Applicant authentication was adjusted to reduce false 403/429 responses on shared campus networks and mobile connections while preserving stronger controls for privileged portals. POST `/login` and `/register` use same-origin enforcement, SameSite session cookies, password verification and account-level failed-login lockout without requiring a CSRF form token. Applicant login lockout is account-based rather than shared-IP based. Administrative, reviewer, College, IRB and System Administrator workflows retain CSRF protection and the stronger controls from the security-hardening release.
 
+## V18 fixes
 
-## V17 Render proxy compatibility
+- Reviewer files are now stored in normal private storage **and** copied into a protected database-backed fallback table. This prevents future review reports from disappearing after a redeploy or filesystem-mount problem.
+- Existing review-report files that are still present at startup are automatically backfilled into the database fallback.
+- Missing legacy reviewer files are shown clearly as unavailable, with a College/IRB action to reopen the assignment for reviewer re-upload.
+- College administrators and authorised users can open reviewer reports inline. PDF files open in-browser and DOCX reports are rendered into a secure HTML preview. Download remains available separately.
+- College Revised Submissions are detected from the actual uploaded College-revision package. A Response to College Review plus at least one revised work document is enough to surface the work even when a legacy status transition was missed.
+- A revision surfaced from upload evidence can be sent to a new reviewer or back to a previous reviewer. The workflow normalises the revision into the formal received state when the College takes action.
+- Review-material checkboxes and labels are left aligned consistently.
 
-- Removed Origin/Referer host-comparison blocking from all portals because reverse proxies can rewrite these headers.
-- Applicant login and registration do not require a CSRF form token.
-- Protected workflow POST actions still require the per-session CSRF token.
-- Password hashing, role authorization, session security, login lockout, rate limiting, upload validation and security-event logging remain enabled.
-- Build ID: `2026-08-10-origin-check-removed-v17`.
+### Important for older missing reports
+
+If a reviewer report disappeared before V18 because `/app/storage` was not persistent, V18 cannot recreate the lost bytes. The assignment page will show **Request report re-upload**. After reopening the assignment, use **Regenerate & Resend Secure Link** if the reviewer needs a new link. All newly uploaded reviewer files receive the database fallback automatically.
