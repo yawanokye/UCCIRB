@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import mimetypes
+from pathlib import Path
 from email.message import EmailMessage
 from html import escape
 
@@ -34,7 +36,7 @@ def _gmail_access_token() -> str:
     return token
 
 
-def send_gmail_html(to: str, subject: str, html: str) -> str:
+def send_gmail_html(to: str, subject: str, html: str, attachments: list[tuple[Path, str]] | None = None) -> str:
     token = _gmail_access_token()
     message = EmailMessage()
     message['To'] = to
@@ -42,6 +44,16 @@ def send_gmail_html(to: str, subject: str, html: str) -> str:
     message['Subject'] = subject
     message.set_content('This message contains an HTML secure-review invitation. Please open it in an HTML-capable email client.')
     message.add_alternative(html, subtype='html')
+    for path, filename in attachments or []:
+        path = Path(path)
+        if not path.exists():
+            continue
+        content_type, _ = mimetypes.guess_type(filename)
+        if content_type and '/' in content_type:
+            maintype, subtype = content_type.split('/', 1)
+        else:
+            maintype, subtype = 'application', 'octet-stream'
+        message.add_attachment(path.read_bytes(), maintype=maintype, subtype=subtype, filename=filename)
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode('ascii').rstrip('=')
     response = httpx.post(
         'https://gmail.googleapis.com/gmail/v1/users/me/messages/send',
@@ -55,9 +67,11 @@ def send_gmail_html(to: str, subject: str, html: str) -> str:
 
 def review_assignment_email(*, reviewer_name: str, reviewer_email: str, level: str, count: int,
                             secure_url: str, due_at, link_expires_at, message: str = '',
-                            assigning_office: str = 'Institutional Review Board Secretariat') -> str:
+                            assigning_office: str = 'Institutional Review Board Secretariat',
+                            attachments: list[tuple[Path, str]] | None = None, attachment_note: str = '') -> str:
     review_label = 'College Scientific Review' if level == 'college' else 'IRB Ethical Review'
     optional_message = f'<p><strong>Message from the assigning office:</strong><br>{escape(message)}</p>' if message else ''
+    attachment_html = f'<p><strong>Attached review materials:</strong> {escape(attachment_note)}</p>' if attachment_note else ''
     due_text = due_at.strftime('%d %B %Y, %H:%M UTC')
     expiry_text = link_expires_at.strftime('%d %B %Y, %H:%M UTC')
     html = f'''<!doctype html><html><body style="font-family:Arial,sans-serif;color:#182431;line-height:1.55">
@@ -67,6 +81,7 @@ def review_assignment_email(*, reviewer_name: str, reviewer_email: str, level: s
       <p>Dear {escape(reviewer_name)},</p>
       <p>You have been assigned <strong>{count}</strong> ethical-clearance application{'s' if count != 1 else ''} for {review_label.lower()}.</p>
       {optional_message}
+      {attachment_html}
       <p><a href="{escape(secure_url)}" style="display:inline-block;background:#082b4c;color:#fff;text-decoration:none;padding:12px 18px;border-radius:7px;font-weight:bold">Open Secure Review Workspace</a></p>
       <p>This single secure link contains all applications assigned in this batch. Applicant details are already bound to the assignment. For each application, first complete the conflict-of-interest declaration, then download the application package and submit that application's review report separately.</p>
       <div style="margin:20px 0;padding:16px;background:#fff7dc;border:1px solid #ead58c;border-radius:8px">
@@ -75,7 +90,7 @@ def review_assignment_email(*, reviewer_name: str, reviewer_email: str, level: s
       <p>Please do not forward the secure link.</p>
       <p>Regards,<br>{escape(assigning_office)}<br>University of Cape Coast</p>
     </div></body></html>'''
-    send_gmail_html(reviewer_email, f'UCC {review_label} Assignment', html)
+    send_gmail_html(reviewer_email, f'UCC {review_label} Assignment', html, attachments=attachments)
     return html
 
 
