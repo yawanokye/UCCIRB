@@ -1,3 +1,11 @@
+# V15 Login/CSRF Reliability Patch
+
+- Renders CSRF tokens directly inside applicant, administrative and system-admin login forms.
+- Renders CSRF token directly in applicant registration form.
+- Makes same-origin checks proxy-aware for Render via X-Forwarded-Host.
+- Adds safe server-side diagnostics distinguishing CSRF rejection from portal-role mismatch without logging passwords or raw CSRF tokens.
+- Build ID: `2026-08-10-login-csrf-diagnostics-v15`.
+
 # UCC Ethical Clearance Portal — Phase 2 V12
 
 A working FastAPI/PostgreSQL-ready research ethics governance portal for the University of Cape Coast Institutional Review Board.
@@ -243,3 +251,8 @@ No additional Render environment variable is required for V12. Gmail attachment 
 - The review assignment queue lists revised submissions separately and supports assignment to a new reviewer while preserving the shortcut to previous reviewers.
 - Initial Secretariat screening retains the secure in-frame document viewer, per-document checklist/comments, and return-to-applicant workflow.
 - Security hardening from V13 remains enabled.
+
+
+## V16 balanced applicant security
+
+Applicant authentication was adjusted to reduce false 403/429 responses on shared campus networks and mobile connections while preserving stronger controls for privileged portals. POST `/login` and `/register` use same-origin enforcement, SameSite session cookies, password verification and account-level failed-login lockout without requiring a CSRF form token. Applicant login lockout is account-based rather than shared-IP based. Administrative, reviewer, College, IRB and System Administrator workflows retain CSRF protection and the stronger controls from the security-hardening release.
