@@ -137,4 +137,43 @@ BOOTSTRAP_ADMIN_NAME=System Administrator
 BOOTSTRAP_ADMIN_PASSWORD=<strong-initial-password>
 ```
 
-The bootstrap process creates the account only when that email does not already exist. After sign-in, the System Administrator can create other authorised administrative accounts from `/system-admin`. Applicants continue to create their own accounts from `/register`.
+The bootstrap settings are authoritative for the configured System Administrator account. On startup, if the email already exists under another role, the portal promotes it to `superadmin`, activates it, removes any College restriction, and synchronises its password with `BOOTSTRAP_ADMIN_PASSWORD`. After sign-in, the System Administrator can create other authorised administrative accounts from `/system-admin`. Applicants continue to create their own accounts from `/register`.
+
+
+## V8 bootstrap repair
+
+Build: `2026-08-09-phase2-admin-bootstrap-v8`
+
+This release repairs existing databases where the email configured in `BOOTSTRAP_ADMIN_EMAIL` was already present as an applicant or another administrative role. The environment-defined bootstrap account is synchronised to the System Administrator role at application startup.
+
+
+## Phase 2 V10 - applicant-first landing page and official resources
+
+The public portal has been reorganised so that **Start New Application** and **Applicant Login** are the dominant actions. Administrative and System Administrator access remains available in a quieter institutional-access section.
+
+Public applicant support now includes `/applicant-guide` with:
+
+- How to apply online
+- Required application documents
+- Important pre-submission information
+- Application fee schedule
+- Official UCC-IRB forms and templates
+- Explanation of College Scientific Committee vs direct IRB Secretariat routing
+
+Official PDFs are packaged under `app/static/resources/` and are therefore deployed with the application. The Applicant Dashboard, New Application page and application document-upload area all link back to the guide/resources.
+
+### Included resources
+
+- Composite Application Form
+- Application Instructions
+- Adult Informed Consent Form
+- Child Assent Form
+- Consent from Records Keepers
+- Abridged CV Template
+- Ethical Clearance Application Fee Schedule
+
+### Core application completeness validation
+
+Before initial submission the portal now checks for a protocol or Composite Form, application letter, similarity report and applicant CV. Student applications additionally require supervisor approval, Head of Unit support and supervisor CV. If the Composite Form is not uploaded, a completed IRB checklist is also required. Study-specific consent, assent, records-access and data-collection instruments remain conditional and are checked according to the study.
+
+Build ID: `2026-08-10-applicant-resources-v10`
