@@ -256,3 +256,12 @@ No additional Render environment variable is required for V12. Gmail attachment 
 ## V16 balanced applicant security
 
 Applicant authentication was adjusted to reduce false 403/429 responses on shared campus networks and mobile connections while preserving stronger controls for privileged portals. POST `/login` and `/register` use same-origin enforcement, SameSite session cookies, password verification and account-level failed-login lockout without requiring a CSRF form token. Applicant login lockout is account-based rather than shared-IP based. Administrative, reviewer, College, IRB and System Administrator workflows retain CSRF protection and the stronger controls from the security-hardening release.
+
+
+## V17 Render proxy compatibility
+
+- Removed Origin/Referer host-comparison blocking from all portals because reverse proxies can rewrite these headers.
+- Applicant login and registration do not require a CSRF form token.
+- Protected workflow POST actions still require the per-session CSRF token.
+- Password hashing, role authorization, session security, login lockout, rate limiting, upload validation and security-event logging remain enabled.
+- Build ID: `2026-08-10-origin-check-removed-v17`.
