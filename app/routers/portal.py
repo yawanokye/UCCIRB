@@ -9,6 +9,7 @@ import string
 import zipfile
 import mimetypes
 from html import escape as html_escape
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
@@ -39,6 +40,7 @@ from ..models import (
     ReviewAssignmentBatchItem,
     ReviewAssignmentDocument,
     ReviewReportDocument,
+    ReviewReportFileBlob,
     ReviewerAssignment,
     ReviewerDeclaration,
     ReviewerContact,
@@ -52,7 +54,7 @@ from ..services.auth import hash_password, require_roles, require_user
 from ..services.certificate import certificate_path, generate_certificate_pdf
 from ..services.email import (college_revision_request_email, college_revision_submitted_email,
                               gmail_configured, review_assignment_email, secretariat_return_email)
-from ..services.storage import save_upload, storage_path
+from ..services.storage import safe_original_name, save_upload, storage_path
 from ..services.workflow import audit, transition
 from ..services.routing import (
     DIRECT_IRB_CODE,
@@ -493,6 +495,112 @@ def report_documents_map(db: Session, assignments):
     return result
 
 
+def review_report_blob(db: Session, document_id: str):
+    return db.get(ReviewReportFileBlob, document_id)
+
+
+def review_report_is_available(db: Session, doc: ReviewReportDocument, application_id: str) -> bool:
+    try:
+        if storage_path(application_id, doc.stored_name).exists():
+            return True
+    except Exception:
+        pass
+    return review_report_blob(db, doc.id) is not None
+
+
+def review_report_availability_map(db: Session, assignments):
+    result = {}
+    reports = report_documents_map(db, assignments)
+    app_by_assignment = {a.id: a.application_id for a in assignments}
+    for assignment_id, docs in reports.items():
+        app_id = app_by_assignment.get(assignment_id)
+        for doc in docs:
+            result[doc.id] = bool(app_id and review_report_is_available(db, doc, app_id))
+    return result
+
+
+def persist_review_report_file(db: Session, assignment: ReviewerAssignment, kind: str, upload: UploadFile):
+    """Save a reviewer file to private storage and keep a PostgreSQL-backed resilience copy."""
+    stored, original = save_upload(upload, assignment.application_id)
+    report_doc = ReviewReportDocument(
+        assignment_id=assignment.id,
+        document_kind=kind,
+        original_name=original,
+        stored_name=stored,
+    )
+    db.add(report_doc)
+    db.flush()
+    path = storage_path(assignment.application_id, stored)
+    try:
+        content = path.read_bytes()
+    except OSError:
+        content = b''
+    if content:
+        media_type = mimetypes.guess_type(original)[0] or 'application/octet-stream'
+        db.add(ReviewReportFileBlob(
+            review_document_id=report_doc.id,
+            content=content,
+            media_type=media_type,
+            size_bytes=len(content),
+        ))
+    return report_doc
+
+
+def college_revision_ready_ids(db: Session, application_ids: list[str]) -> set[str]:
+    """Identify College revisions that contain a response plus at least one revised work file.
+
+    This is intentionally based on the uploaded revision package, not only the application status.
+    It repairs legacy cases where revised files were received but the final status transition was
+    missed, which previously made the work disappear from the College Revised Submissions queue.
+    """
+    if not application_ids:
+        return set()
+    rows = db.execute(
+        select(DocumentSubmissionMeta.application_id, ApplicationDocument.document_type)
+        .join(ApplicationDocument, ApplicationDocument.id == DocumentSubmissionMeta.document_id)
+        .where(
+            DocumentSubmissionMeta.application_id.in_(application_ids),
+            DocumentSubmissionMeta.submission_kind == 'college_revision',
+        )
+    ).all()
+    by_app = {}
+    for app_id, dtype in rows:
+        by_app.setdefault(app_id, set()).add(dtype)
+    ready = set()
+    for app_id, types in by_app.items():
+        if 'Response to College Review' in types and any(t != 'Response to College Review' for t in types):
+            ready.add(app_id)
+    return ready
+
+
+def ensure_college_revision_received(db: Session, app: EthicsApplication, actor_id: str):
+    """Normalise a complete uploaded College revision into the formal received state."""
+    if app.status == AppStatus.COLLEGE_REVISED.value:
+        return
+    if app.status != AppStatus.COLLEGE_REVISION.value:
+        return
+    if app.id not in college_revision_ready_ids(db, [app.id]):
+        return
+    latest_round = db.scalar(select(func.max(DocumentSubmissionMeta.round_no)).where(
+        DocumentSubmissionMeta.application_id == app.id,
+        DocumentSubmissionMeta.submission_kind == 'college_revision',
+    )) or 1
+    existing = db.scalar(select(ApplicationSubmission.id).where(
+        ApplicationSubmission.application_id == app.id,
+        ApplicationSubmission.submission_kind == 'college_revision',
+        ApplicationSubmission.round_no == latest_round,
+    ))
+    if not existing:
+        db.add(ApplicationSubmission(
+            application_id=app.id,
+            submission_kind='college_revision',
+            round_no=latest_round,
+            submitted_by=app.applicant_id,
+            submitted_at=datetime.utcnow(),
+        ))
+    transition(db, app, AppStatus.COLLEGE_REVISED.value, actor_id, 'Revised documents received by College Scientific Committee')
+
+
 def review_assignment_documents_map(db: Session, assignments):
     ids = [a.id for a in assignments]
     result = {a.id: [] for a in assignments}
@@ -816,12 +924,12 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         app_ids = [a.id for a in apps]
         kinds = latest_submission_kind_map(db, app_ids)
         revision_ids = college_revision_evidence_ids(db, app_ids)
+        revision_ready_ids = college_revision_ready_ids(db, app_ids)
 
-        # Keep the College dashboard action-oriented. A revised submission is driven primarily by
-        # its workflow status and backed by revision evidence, never by the fragile latest-kind
-        # value alone. This guarantees a newly returned student revision appears immediately.
+        # A complete uploaded revision package is visible even if a legacy deployment missed the
+        # final submit-status transition. This prevents genuine revised work from disappearing.
         pending_initial = [a for a in apps if a.status in {AppStatus.SUBMITTED.value, AppStatus.SECRETARIAT_SCREENING.value}]
-        revised_apps = [a for a in apps if a.status == AppStatus.COLLEGE_REVISED.value]
+        revised_apps = [a for a in apps if a.status == AppStatus.COLLEGE_REVISED.value or (a.status == AppStatus.COLLEGE_REVISION.value and a.id in revision_ready_ids)]
         fresh_apps = [a for a in apps if a.status in {AppStatus.FORWARDED_TO_COLLEGE.value, AppStatus.AWAITING_COLLEGE_REVIEWER.value} and a.id not in revision_ids]
         active_review_apps = [a for a in apps if a.status == AppStatus.COLLEGE_REVIEW.value]
         awaiting_decision_apps = [a for a in apps if a.status == AppStatus.AWAITING_COLLEGE_DECISION.value]
@@ -839,7 +947,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
                 revised_apps=revised_apps, active_review_apps=active_review_apps,
                 awaiting_decision_apps=awaiting_decision_apps, attention_by_app=attention_by_app,
                 submission_kinds=kinds, revision_ids=revision_ids,
-                previous_reviewers_by_app=previous_reviewers_by_app)
+                previous_reviewers_by_app=previous_reviewers_by_app, revision_ready_ids=revision_ready_ids)
         )
 
     if user.role in {Role.COLLEGE_REVIEWER.value, Role.IRB_REVIEWER.value}:
@@ -1130,7 +1238,9 @@ def application_detail(request: Request, app_id: str, db: Session = Depends(get_
     declarations = declaration_map(db, assignments)
     assignment_meta = assignment_meta_map(db, assignments)
     report_documents = report_documents_map(db, assignments)
+    report_availability = review_report_availability_map(db, assignments)
     assignment_documents = review_assignment_documents_map(db, assignments)
+    college_revision_ready = app.id in college_revision_ready_ids(db, [app.id])
     prior_college_reviewers = previous_college_reviewers(db, app.id) if user.role == Role.COLLEGE_ADMIN.value and user.college_id == app.college_id else []
 
     college_reviewers = []
@@ -1196,7 +1306,9 @@ def application_detail(request: Request, app_id: str, db: Session = Depends(get_
             declarations=declarations,
             assignment_meta=assignment_meta,
             report_documents=report_documents,
+            report_availability=report_availability,
             assignment_documents=assignment_documents,
+            college_revision_ready=college_revision_ready,
             previous_college_reviewers=prior_college_reviewers,
             college_reviewers=college_reviewers,
             irb_reviewers=irb_reviewers,
@@ -1254,6 +1366,7 @@ def upload_document(
     db.add(DocumentSubmissionMeta(
         document_id=doc.id, application_id=app.id, submission_kind=submission_kind, round_no=round_no
     ))
+    db.flush()
     audit(db, user.id, 'document_uploaded', app.id, f'{document_type} v{doc.version}: {original} | {submission_kind} round {round_no}')
     db.commit()
     return RedirectResponse(f'/applications/{app.id}', status_code=303)
@@ -1756,13 +1869,7 @@ def submit_review(
     for kind, upload in uploads:
         if not upload or not upload.filename:
             continue
-        stored, original = save_upload(upload, app.id)
-        db.add(ReviewReportDocument(
-            assignment_id=assignment.id,
-            document_kind=kind,
-            original_name=original,
-            stored_name=stored,
-        ))
+        persist_review_report_file(db, assignment, kind, upload)
 
     complete_review_assignment(db, assignment, user.id, recommendation, comments.strip())
     db.commit()
@@ -1781,8 +1888,13 @@ def college_revision_disposition(
     user = require_user(request, db)
     require_roles(user, Role.COLLEGE_ADMIN.value)
     app = get_app_or_404(db, app_id)
-    if user.college_id != app.college_id or app.status != AppStatus.COLLEGE_REVISED.value:
-        raise HTTPException(403, 'This revised submission is not available for College disposition.')
+    if user.college_id != app.college_id:
+        raise HTTPException(403, 'This revised submission does not belong to your College.')
+    if app.status == AppStatus.COLLEGE_REVISION.value:
+        ensure_college_revision_received(db, app, user.id)
+        db.flush()
+    if app.status != AppStatus.COLLEGE_REVISED.value:
+        raise HTTPException(403, 'This revised submission is not yet ready for College disposition.')
 
     if review_action == 'administrative':
         transition(db, app, AppStatus.AWAITING_COLLEGE_DECISION.value, user.id, 'Revised submission administratively reviewed by College Scientific Committee')
@@ -2392,6 +2504,7 @@ def _review_queue_data(db: Session, user: User, level: str):
             AppStatus.FORWARDED_TO_COLLEGE.value,
             AppStatus.AWAITING_COLLEGE_REVIEWER.value,
             AppStatus.COLLEGE_REVIEW.value,
+            AppStatus.COLLEGE_REVISION.value,
             AppStatus.COLLEGE_REVISED.value,
         ]
         apps = db.scalars(
@@ -2457,14 +2570,22 @@ def _render_review_queue(request: Request, db: Session, user: User, level: str):
     app_ids = [a.id for a in apps]
     kinds = latest_submission_kind_map(db, app_ids)
     previous_reviewers_by_app = {}
+    revision_ready_ids = set()
 
     if level == 'college':
         revision_ids = college_revision_evidence_ids(db, app_ids)
-        # Current status is authoritative for a just-returned revision. Historical revision evidence
-        # keeps an application in the revised group when it is subsequently assigned for re-review.
-        revised_apps = [a for a in apps if a.status == AppStatus.COLLEGE_REVISED.value or a.id in revision_ids]
+        revision_ready_ids = college_revision_ready_ids(db, app_ids)
+        # A complete revision package is queue-visible even if the older status transition was
+        # missed. Historical revision evidence keeps re-reviews in the revised group while they
+        # remain inside the College review stage.
+        revised_apps = [
+            a for a in apps
+            if a.status == AppStatus.COLLEGE_REVISED.value
+            or (a.status == AppStatus.COLLEGE_REVISION.value and a.id in revision_ready_ids)
+            or (a.status == AppStatus.COLLEGE_REVIEW.value and a.id in revision_ids)
+        ]
         revised_ids = {a.id for a in revised_apps}
-        fresh_apps = [a for a in apps if a.id not in revised_ids]
+        fresh_apps = [a for a in apps if a.id not in revised_ids and a.status != AppStatus.COLLEGE_REVISION.value]
         previous_reviewers_by_app = {a.id: previous_college_reviewers(db, a.id) for a in revised_apps}
     else:
         revised_apps = [a for a in apps if a.status == AppStatus.IRB_REVISED.value or kinds.get(a.id) == 'irb_revision']
@@ -2501,6 +2622,7 @@ def _render_review_queue(request: Request, db: Session, user: User, level: str):
             email_ready=gmail_configured(),
             review_material_options=REVIEW_MATERIAL_OPTIONS,
             default_review_materials=DEFAULT_REVIEW_MATERIALS,
+            revision_ready_ids=revision_ready_ids,
             error=None,
         ),
     )
@@ -2563,6 +2685,12 @@ def assign_review_batch(
     selected = [eligible.get(i) for i in ids]
     if any(a is None for a in selected):
         raise HTTPException(400, 'One or more selected applications are not available in this review queue.')
+
+    if level == 'college':
+        for app in selected:
+            if app.status == AppStatus.COLLEGE_REVISION.value:
+                ensure_college_revision_received(db, app, user.id)
+        db.flush()
 
     problems = []
     for app in selected:
@@ -2687,12 +2815,14 @@ def _render_review_batch_detail(request: Request, db: Session, user: User, batch
         .order_by(ReviewAssignmentBatchItem.work_no)
     ).unique().all()
     declarations = declaration_map(db, [i.assignment for i in items])
-    reports = report_documents_map(db, [i.assignment for i in items])
-    assignment_documents = review_assignment_documents_map(db, [i.assignment for i in items])
+    batch_assignments = [i.assignment for i in items]
+    reports = report_documents_map(db, batch_assignments)
+    report_availability = review_report_availability_map(db, batch_assignments)
+    assignment_documents = review_assignment_documents_map(db, batch_assignments)
     return request.app.state.templates.TemplateResponse(
         request,
         'review_batch_detail.html',
-        ctx(request, user, batch=batch, review_contact=reviewer_contact_for_proxy(db, batch.reviewer_id), items=items, declarations=declarations, reports=reports, assignment_documents=assignment_documents, secure_url=secure_url, notice=notice, now=datetime.utcnow()),
+        ctx(request, user, batch=batch, review_contact=reviewer_contact_for_proxy(db, batch.reviewer_id), items=items, declarations=declarations, reports=reports, report_availability=report_availability, assignment_documents=assignment_documents, secure_url=secure_url, notice=notice, now=datetime.utcnow()),
     )
 
 
@@ -2983,20 +3113,13 @@ def secure_review_submit(
     for kind, upload in uploads:
         if not upload or not upload.filename:
             continue
-        stored, original = save_upload(upload, app.id)
-        db.add(ReviewReportDocument(
-            assignment_id=assignment.id,
-            document_kind=kind,
-            original_name=original,
-            stored_name=stored,
-        ))
+        persist_review_report_file(db, assignment, kind, upload)
     complete_review_assignment(db, assignment, batch.reviewer_id, recommendation, comments.strip())
     db.commit()
     return RedirectResponse(f'/secure/reviews/{token}', status_code=303)
 
 
-@router.get('/review-reports/{document_id}/download')
-def download_review_report(request: Request, document_id: str, db: Session = Depends(get_db)):
+def _authorise_review_report(request: Request, db: Session, document_id: str):
     user = require_user(request, db)
     doc = db.get(ReviewReportDocument, document_id)
     if not doc:
@@ -3014,12 +3137,99 @@ def download_review_report(request: Request, document_id: str, db: Session = Dep
         allowed = True
     if not allowed:
         raise HTTPException(403)
+    return user, doc, assignment, app
+
+
+def _review_report_bytes(db: Session, doc: ReviewReportDocument, app: EthicsApplication):
     path = storage_path(app.id, doc.stored_name)
-    if not path.exists():
-        raise HTTPException(404, 'Review report file is unavailable.')
+    if path.exists():
+        try:
+            return path.read_bytes(), path.suffix.lower(), mimetypes.guess_type(doc.original_name)[0] or 'application/octet-stream'
+        except OSError:
+            pass
+    blob = review_report_blob(db, doc.id)
+    if blob:
+        ext = Path(doc.original_name).suffix.lower()
+        return bytes(blob.content), ext, blob.media_type or mimetypes.guess_type(doc.original_name)[0] or 'application/octet-stream'
+    return None, Path(doc.original_name).suffix.lower(), mimetypes.guess_type(doc.original_name)[0] or 'application/octet-stream'
+
+
+@router.get('/review-reports/{document_id}/view')
+def view_review_report(request: Request, document_id: str, db: Session = Depends(get_db)):
+    user, doc, assignment, app = _authorise_review_report(request, db, document_id)
+    content, ext, media_type = _review_report_bytes(db, doc, app)
+    if content is None:
+        body = (
+            '<div style="max-width:760px;margin:60px auto;padding:24px;border:1px solid #e4c9cd;border-left:5px solid #a5252d;border-radius:10px;font-family:Arial,sans-serif">'
+            '<h2 style="color:#1f2056">Review report file is unavailable</h2>'
+            '<p>The database record exists, but the original uploaded file is no longer present in private storage. '
+            'This can happen when an earlier deployment used non-persistent storage.</p>'
+            '<p>Return to the review assignment record and use <strong>Request report re-upload</strong>, then regenerate/resend the secure reviewer link if necessary.</p>'
+            '</div>'
+        )
+        return HTMLResponse(body, status_code=404, headers={'Cache-Control': 'no-store'})
+    audit(db, user.id, 'review_report_viewed', app.id, doc.original_name)
+    db.commit()
+    if ext == '.pdf':
+        return Response(content=content, media_type='application/pdf', headers={
+            'Content-Disposition': f'inline; filename="{safe_original_name(doc.original_name, "review-report.pdf")}"',
+            'Cache-Control': 'no-store',
+        })
+    if ext == '.docx':
+        try:
+            from docx import Document as DocxDocument
+            source = DocxDocument(io.BytesIO(content))
+            chunks = []
+            for para in source.paragraphs:
+                text = html_escape(para.text)
+                if text.strip():
+                    chunks.append('<p>' + text + '</p>')
+            for table in source.tables:
+                rows = []
+                for row in table.rows:
+                    rows.append('<tr>' + ''.join('<td>' + html_escape(cell.text) + '</td>' for cell in row.cells) + '</tr>')
+                chunks.append('<table>' + ''.join(rows) + '</table>')
+            return HTMLResponse(_preview_html(doc.original_name, ''.join(chunks) or '<p>No readable text was found in this DOCX report.</p>'), headers={'Cache-Control': 'no-store'})
+        except Exception:
+            pass
+    return Response(content=content, media_type=media_type, headers={
+        'Content-Disposition': f'inline; filename="{safe_original_name(doc.original_name, "review-report")}"',
+        'Cache-Control': 'no-store',
+    })
+
+
+@router.get('/review-reports/{document_id}/download')
+def download_review_report(request: Request, document_id: str, db: Session = Depends(get_db)):
+    user, doc, assignment, app = _authorise_review_report(request, db, document_id)
+    content, ext, media_type = _review_report_bytes(db, doc, app)
+    if content is None:
+        raise HTTPException(404, 'Review report file is unavailable. Ask the reviewer to re-upload the report.')
     filename = doc.original_name
     if user.id == app.applicant_id:
-        suffix = path.suffix or ''
         label = 'Scientific-Review-Report' if assignment.level == 'college' else 'IRB-Review-Report'
-        filename = f'{app.reference_no or "UCC-IRB"}-{label}{suffix}'
-    return FileResponse(path, filename=filename, headers={'Cache-Control': 'no-store'})
+        filename = f'{app.reference_no or "UCC-IRB"}-{label}{ext}'
+    audit(db, user.id, 'review_report_downloaded', app.id, doc.original_name)
+    db.commit()
+    return Response(content=content, media_type=media_type, headers={
+        'Content-Disposition': f'attachment; filename="{safe_original_name(filename, "review-report")}"',
+        'Cache-Control': 'no-store',
+    })
+
+
+@router.post('/review-assignments/{assignment_id}/request-report-reupload')
+def request_review_report_reupload(request: Request, assignment_id: str, db: Session = Depends(get_db)):
+    user = require_user(request, db)
+    assignment = get_assignment_or_404(db, assignment_id)
+    app = assignment.application
+    if assignment.level == 'college':
+        if user.role != Role.COLLEGE_ADMIN.value or user.college_id != app.college_id:
+            raise HTTPException(403)
+    elif user.role not in {Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value}:
+        raise HTTPException(403)
+    assignment.status = 'accepted'
+    audit(db, user.id, 'review_report_reupload_requested', app.id, 'Reviewer report file missing; assignment reopened for file re-upload')
+    db.commit()
+    batch_item = db.scalar(select(ReviewAssignmentBatchItem).where(ReviewAssignmentBatchItem.assignment_id == assignment.id))
+    if batch_item:
+        return RedirectResponse(f'/review-batches/{batch_item.batch_id}', status_code=303)
+    return RedirectResponse(f'/applications/{app.id}', status_code=303)
