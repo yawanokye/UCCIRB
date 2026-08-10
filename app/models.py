@@ -3,7 +3,7 @@ from datetime import datetime
 from enum import Enum
 import uuid
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -376,6 +376,23 @@ class ReviewReportDocument(Base):
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     assignment = relationship("ReviewerAssignment")
+
+
+class ReviewReportFileBlob(Base):
+    """Database-backed copy of reviewer-uploaded files.
+
+    The normal copy remains in private file storage for efficient serving. This blob is a
+    resilience fallback so a reviewer report remains available if a Render redeploy or
+    storage-mount problem temporarily removes the filesystem copy.
+    """
+    __tablename__ = "review_report_file_blobs"
+    review_document_id: Mapped[str] = mapped_column(ForeignKey("review_report_documents.id"), primary_key=True)
+    content: Mapped[bytes] = mapped_column(LargeBinary)
+    media_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    document = relationship("ReviewReportDocument")
 
 
 class SecretariatDocumentCheck(Base):

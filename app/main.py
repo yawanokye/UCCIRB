@@ -12,7 +12,7 @@ from .config import (ALLOWED_HOSTS, APP_NAME, BASE_DIR, BOOTSTRAP_ADMIN_EMAIL, B
                      SESSION_MAX_AGE_SECONDS, STORAGE_DIR)
 from .database import Base, SessionLocal, engine
 from .routers import auth, portal
-from .models import (AppStatus, ApplicationDocument, College, CollegeAccessRequest, EthicsApplication, Role, User)
+from .models import (AppStatus, ApplicationDocument, College, CollegeAccessRequest, EthicsApplication, ReviewReportDocument, ReviewReportFileBlob, ReviewerAssignment, Role, User)
 from .services.auth import hash_password
 from .services.routing import ensure_routing_units, is_scientific_committee_college
 from .security import csrf_protect, request_rate_limit, security_headers
@@ -96,6 +96,41 @@ def migrate_v11_legacy_college_routing():
 
 migrate_v11_legacy_college_routing()
 
+def backfill_review_report_blobs():
+    """Copy any still-available legacy reviewer files into the durable database fallback."""
+    import mimetypes
+    from .services.storage import storage_path
+    with SessionLocal() as db:
+        docs = db.scalars(select(ReviewReportDocument)).all()
+        changed = False
+        for doc in docs:
+            if db.get(ReviewReportFileBlob, doc.id):
+                continue
+            assignment = db.get(ReviewerAssignment, doc.assignment_id)
+            if not assignment:
+                continue
+            path = storage_path(assignment.application_id, doc.stored_name)
+            if not path.exists():
+                continue
+            try:
+                content = path.read_bytes()
+            except OSError:
+                continue
+            if not content:
+                continue
+            db.add(ReviewReportFileBlob(
+                review_document_id=doc.id,
+                content=content,
+                media_type=mimetypes.guess_type(doc.original_name)[0] or 'application/octet-stream',
+                size_bytes=len(content),
+            ))
+            changed = True
+        if changed:
+            db.commit()
+
+
+backfill_review_report_blobs()
+
 api_docs = {} if ENABLE_API_DOCS else {'docs_url': None, 'redoc_url': None, 'openapi_url': None}
 app = FastAPI(title=APP_NAME, dependencies=[Depends(csrf_protect)], **api_docs)
 
@@ -119,7 +154,7 @@ app.state.templates = Jinja2Templates(directory=BASE_DIR / 'app' / 'templates')
 app.include_router(auth.router)
 app.include_router(portal.router)
 
-BUILD_ID = '2026-08-10-origin-check-removed-v17'
+BUILD_ID = '2026-08-10-review-report-revision-queue-v18'
 
 
 @app.get('/healthz', include_in_schema=False)
@@ -144,13 +179,15 @@ def healthz():
         'applicant_review_report_download': True,
         'applicant_reviewer_privacy': True,
         'college_revision_reviewer_disposition': True,
-        'college_revision_queue_repair': True,
+        'college_revision_queue_repair': 'upload-evidence-v2',
+        'review_report_database_fallback': True,
+        'review_report_inline_view': True,
+        'review_material_left_alignment': True,
         'college_dashboard_organised': True,
         'security_hardening': 'v1',
         'csrf_protection': True,
-        'origin_host_check': False,
-        'public_auth_csrf_form_token': False,
-        'protected_workflow_csrf_token': True,
+        'applicant_auth_csrf_mode': 'no-origin-check-no-form-token',
+        'origin_referer_enforcement': False,
         'applicant_login_lockout': 'account-based',
         'admin_login_lockout': 'account-and-ip',
         'login_rate_controls': True,

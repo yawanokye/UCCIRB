@@ -7,6 +7,7 @@ import time
 import logging
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
+from urllib.parse import urlparse
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy import func, select
@@ -109,20 +110,39 @@ def ensure_csrf_token(request: Request) -> str:
     return token
 
 
+def same_origin(request: Request) -> bool:
+    origin = request.headers.get("origin")
+    referer = request.headers.get("referer")
+    source = origin or referer
+    if not source:
+        return True
+    try:
+        parsed = urlparse(source)
+        source_host = parsed.netloc.lower()
+        candidates = {
+            request.headers.get("host", "").lower(),
+            request.headers.get("x-forwarded-host", "").split(",")[0].strip().lower(),
+            request.url.netloc.lower(),
+        }
+        candidates.discard("")
+        return any(hmac.compare_digest(source_host, candidate) for candidate in candidates)
+    except Exception:
+        return False
+
+
 async def csrf_protect(request: Request):
     token = ensure_csrf_token(request)
     if request.method in _SAFE_METHODS:
         return
 
-    # Origin/Referer host matching is intentionally disabled for all portals.
-    # Render and institutional proxies can rewrite these headers and incorrectly
-    # block legitimate users. Public login and registration remain protected by
-    # password verification, account lockout, rate limits and secure session cookies.
+    # Origin/Referer matching is intentionally not enforced. Reverse proxies,
+    # institutional gateways and browser privacy settings can legitimately alter
+    # these headers and previously caused false 403 responses on Render.
+    # Public authentication stays low-friction; protected workflow forms still
+    # require the session-bound CSRF token below.
     if request.url.path in {"/login", "/register"}:
         return
 
-    # Protected workflow POSTs still require the per-session CSRF token, but they
-    # are no longer rejected based on Origin/Referer host comparison.
     header_token = request.headers.get("x-csrf-token")
     supplied = header_token
     if not supplied:
