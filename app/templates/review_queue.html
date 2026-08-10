@@ -3,15 +3,15 @@
 {% block content %}
 <div class="pagehead">
   <div><span class="eyebrow">{{ 'College Scientific Committee' if level == 'college' else 'IRB Secretariat' }}</span>
-    <h1>{{ 'Scientific review receiving & assignment queue' if level == 'college' else 'IRB ethical review receiving & assignment queue' }}</h1>
-    <p>Select one or several ready applications, assign them to one reviewer, and issue one secure review workspace. Each application remains an individual review item and receives its own report.</p>
+    <h1>{{ 'Email documents for scientific review' if level == 'college' else 'IRB ethical review receiving & assignment queue' }}</h1>
+    <p>{% if level == 'college' %}Select work from one or several applicants, enter the reviewer details and email, and issue one secure assignment link. The reviewer receives the required document package for each applicant and submits each report separately.{% else %}Select one or several ready applications, assign them to an IRB reviewer, and issue one secure review workspace.{% endif %}</p>
   </div>
   <a class="btn secondary" href="/dashboard">Back to Dashboard</a>
 </div>
 
 <div class="metrics">
-  <div><b>{{ apps|length }}</b><span>Applications in assignment queue</span></div>
-  <div><b>{{ reviewers|length }}</b><span>Available reviewers</span></div>
+  <div><b>{{ fresh_apps|length }}</b><span>Fresh submissions</span></div>
+  <div><b>{{ revised_apps|length }}</b><span>Revised submissions</span></div>
   <div><b>{{ batches|length }}</b><span>Recent assignment batches</span></div>
   <div><b>{{ max_reviewers }}</b><span>Maximum reviewers per application per round</span></div>
 </div>
@@ -22,58 +22,55 @@
   <input type="hidden" name="level" value="{{ level }}">
   <h2>1. Select applications to assign</h2>
   <div class="queue-tools"><button type="button" class="btn secondary smallbtn" onclick="toggleAll(true)">Select all available</button><button type="button" class="btn secondary smallbtn" onclick="toggleAll(false)">Clear selection</button><span id="selectedCount" class="chip">0 selected</span></div>
-  <div class="table-wrap">
-  <table>
-    <thead><tr><th></th><th>Reference</th><th>Applicant</th><th>Affiliation</th><th>Research title</th><th>Status</th><th>Reviewers this round</th></tr></thead>
-    <tbody>
-    {% for a in apps %}
-      {% set full = assignment_counts[a.id] >= max_reviewers %}
-      <tr class="{% if full %}row-disabled{% endif %}">
-        <td><input class="app-check" type="checkbox" name="application_ids" value="{{ a.id }}" {% if full %}disabled{% endif %} onchange="updateCount()"></td>
-        <td><a href="/applications/{{ a.id }}">{{ a.reference_no }}</a></td>
-        <td>{{ a.applicant.full_name }}</td>
-        <td>{% if a.college.code == 'IRB-DIRECT' %}{{ a.department or 'Other UCC Unit' }}{% else %}{{ a.college.name }}{% endif %}</td>
-        <td>{{ a.title }}</td>
-        <td><span class="status {{ a.status }}">{{ a.status.replace('_',' ').title() }}</span></td>
-        <td><span class="assignment-count count-{{ assignment_counts[a.id] if assignment_counts[a.id] < 2 else 2 }}">{{ assignment_counts[a.id] }}/{{ max_reviewers }}</span>{% if full %}<br><span class="urgent">Limit reached</span>{% endif %}</td>
-      </tr>
-    {% else %}<tr><td colspan="7" class="empty">No applications are currently ready for reviewer assignment.</td></tr>{% endfor %}
-    </tbody>
-  </table>
+
+  {% macro app_table(records, label, anchor='') %}
+  <div {% if anchor %}id="{{ anchor }}"{% endif %} class="submission-group">
+    <h3>{{ label }} <span class="chip">{{ records|length }}</span></h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th></th><th>Reference</th><th>Applicant</th><th>Affiliation</th><th>Research title</th><th>Status</th><th>Reviewers this round</th></tr></thead>
+      <tbody>{% for a in records %}{% set full = assignment_counts[a.id] >= max_reviewers %}
+        <tr class="{% if full %}row-disabled{% endif %}"><td><input class="app-check" type="checkbox" name="application_ids" value="{{ a.id }}" {% if full %}disabled{% endif %} onchange="updateCount()"></td><td><a href="/applications/{{ a.id }}">{{ a.reference_no }}</a></td><td>{{ a.applicant.full_name }}</td><td>{% if a.college.code == 'IRB-DIRECT' %}{{ a.department or 'Other UCC Unit' }}{% else %}{{ a.college.name }}{% endif %}</td><td>{{ a.title }}</td><td><span class="status {{ a.status }}">{{ a.status.replace('_',' ').title() }}</span></td><td><span class="assignment-count count-{{ assignment_counts[a.id] if assignment_counts[a.id] < 2 else 2 }}">{{ assignment_counts[a.id] }}/{{ max_reviewers }}</span>{% if full %}<br><span class="urgent">Limit reached</span>{% endif %}</td></tr>
+      {% else %}<tr><td colspan="7" class="empty">No {{ label.lower() }} are currently ready for assignment.</td></tr>{% endfor %}</tbody>
+    </table></div>
   </div>
+  {% endmacro %}
+
+  {{ app_table(fresh_apps, 'Fresh submissions') }}
+  {{ app_table(revised_apps, 'Revised submissions', 'revised') }}
 
   <h2 class="assignment-step">2. Reviewer and assignment details</h2>
-  {% if reviewers %}
-  <div class="formgrid">
-    <label>Reviewer
-      <select name="reviewer_id" required>
-        <option value="">Select reviewer</option>
-        {% for r in reviewers %}<option value="{{ r.id }}">{{ r.full_name }} · {{ r.email }} · {{ reviewer_workload[r.id].active }} active{% if reviewer_workload[r.id].overdue %} · {{ reviewer_workload[r.id].overdue }} overdue{% endif %}</option>{% endfor %}
-      </select>
-    </label>
-    <label>Reviewer role
-      <select name="assignment_type"><option value="primary">Primary Reviewer</option><option value="secondary">Secondary Reviewer</option><option value="specialist">Specialist Reviewer</option></select>
-    </label>
-    <label>Review due in days<input type="number" name="due_days" min="1" max="90" value="{{ default_due_days }}" required></label>
-    <label class="wide">Message to reviewer <span class="optional">optional</span><textarea name="message" rows="4" placeholder="Add any instructions specific to this assignment batch."></textarea></label>
-  </div>
-  <div class="alert info"><strong>Secure assignment logic:</strong> one secure link is issued to the reviewer. Applicant names, application references and research details are bound to the server-side assignment. The reviewer cannot substitute another application. Every application requires its own conflict declaration and separate review report submission.</div>
-  <button class="btn" type="submit">Create & Send Secure Assignment</button>
-  {% else %}<div class="alert warning">No active reviewer account is available for this review level. Ask the System Administrator to create the reviewer account first.</div>{% endif %}
+  {% if level == 'college' %}
+    <div class="alert info"><strong>No reviewer portal account is required.</strong> Enter the reviewer details here. The system creates one secure assignment workspace and emails it to the reviewer, following the academic submission portal pattern.</div>
+    {% if saved_contacts %}<label>Recently used reviewer <span class="optional">optional helper</span><select id="savedReviewer" onchange="fillReviewer(this)"><option value="">Enter reviewer manually</option>{% for c in saved_contacts %}<option data-title="{{ c.title or '' }}" data-first="{{ c.first_name }}" data-last="{{ c.last_name }}" data-email="{{ c.email }}" data-phone="{{ c.phone or '' }}">{{ c.title or '' }} {{ c.first_name }} {{ c.last_name }} · {{ c.email }}</option>{% endfor %}</select></label>{% endif %}
+    <div class="formgrid reviewer-entry">
+      <label>Title<select name="reviewer_title" id="reviewer_title"><option value="">Select title</option><option>Prof.</option><option>Dr.</option><option>Mr.</option><option>Mrs.</option><option>Ms.</option><option>Rev.</option></select></label>
+      <label>First name<input name="reviewer_first_name" id="reviewer_first_name" required></label>
+      <label>Surname<input name="reviewer_last_name" id="reviewer_last_name" required></label>
+      <label>Email<input type="email" name="reviewer_email" id="reviewer_email" required></label>
+      <label>Telephone <span class="optional">optional</span><input name="reviewer_phone" id="reviewer_phone"></label>
+      <label>Reviewer role<select name="assignment_type"><option value="primary">Primary Reviewer</option><option value="secondary">Secondary Reviewer</option><option value="specialist">Specialist Reviewer</option></select></label>
+      <label>Review due in days<input type="number" name="due_days" min="1" max="90" value="{{ default_due_days }}" required></label>
+      <label class="wide">Message to reviewer <span class="optional">optional</span><textarea name="message" rows="4" placeholder="Add instructions specific to this group of applications."></textarea></label>
+    </div>
+    <div class="alert info"><strong>Secure assignment:</strong> applicant names, references and documents are tied to the server-side assignment. One reviewer may receive several applications under one link, but every application requires its own conflict declaration and separate review report.</div>
+    <button class="btn" type="submit">Create & Email Secure Review Assignment</button>
+  {% else %}
+    {% if reviewers %}<div class="formgrid"><label>IRB Reviewer<select name="reviewer_id" required><option value="">Select reviewer</option>{% for r in reviewers %}<option value="{{ r.id }}">{{ r.full_name }} · {{ r.email }} · {{ reviewer_workload[r.id].active }} active{% if reviewer_workload[r.id].overdue %} · {{ reviewer_workload[r.id].overdue }} overdue{% endif %}</option>{% endfor %}</select></label><label>Reviewer role<select name="assignment_type"><option value="primary">Primary Reviewer</option><option value="secondary">Secondary Reviewer</option><option value="specialist">Specialist Reviewer</option></select></label><label>Review due in days<input type="number" name="due_days" min="1" max="90" value="{{ default_due_days }}" required></label><label class="wide">Message to reviewer <span class="optional">optional</span><textarea name="message" rows="4"></textarea></label></div><button class="btn" type="submit">Create & Send Secure Assignment</button>{% else %}<div class="alert warning">No active IRB reviewer account is available. Ask the System Administrator to create one first.</div>{% endif %}
+  {% endif %}
 </form>
 
 <section class="card">
   <h2>Recent secure assignment batches</h2>
-  <table><thead><tr><th>Batch</th><th>Reviewer</th><th>Applications</th><th>Progress</th><th>Due</th><th>Delivery</th><th>Status</th><th></th></tr></thead><tbody>
-  {% for b in batches %}
-    {% set st=batch_stats[b.id] %}
-    <tr><td>{{ b.reference }}</td><td>{{ b.reviewer.full_name }}<br><small>{{ b.reviewer.email }}</small></td><td>{{ st.total }}</td><td>{{ st.completed }} completed · {{ st.pending }} pending{% if st.declined %} · {{ st.declined }} declined{% endif %}</td><td>{{ b.due_at.strftime('%d %b %Y') }}</td><td><span class="chip">{{ b.email_status.replace('_',' ').title() }}</span></td><td>{% if b.revoked_at %}<span class="status revoked">Revoked</span>{% elif st.total and st.completed == st.total %}<span class="status approved">Completed</span>{% elif st.completed %}<span class="status">In Progress</span>{% else %}<span class="status">Assigned</span>{% endif %}</td><td><a href="/review-batches/{{ b.id }}">Open</a></td></tr>
+  <div class="table-wrap"><table><thead><tr><th>Batch</th><th>Reviewer</th><th>Applications</th><th>Progress</th><th>Due</th><th>Delivery</th><th>Status</th><th></th></tr></thead><tbody>
+  {% for b in batches %}{% set st=batch_stats[b.id] %}{% set c=batch_contacts.get(b.id) %}
+    <tr><td>{{ b.reference }}</td><td>{% if c %}{{ c.title or '' }} {{ c.first_name }} {{ c.last_name }}<br><small>{{ c.email }}</small>{% else %}{{ b.reviewer.full_name }}<br><small>{{ b.reviewer.email }}</small>{% endif %}</td><td>{{ st.total }}</td><td>{{ st.completed }} completed · {{ st.pending }} pending{% if st.declined %} · {{ st.declined }} declined{% endif %}</td><td>{{ b.due_at.strftime('%d %b %Y') }}</td><td><span class="chip">{{ b.email_status.replace('_',' ').title() }}</span></td><td>{% if b.revoked_at %}<span class="status revoked">Revoked</span>{% elif st.total and st.completed == st.total %}<span class="status approved">Completed</span>{% elif st.completed %}<span class="status">In Progress</span>{% else %}<span class="status">Assigned</span>{% endif %}</td><td><a href="/review-batches/{{ b.id }}">Open</a></td></tr>
   {% else %}<tr><td colspan="8" class="empty">No secure assignment batches yet.</td></tr>{% endfor %}
-  </tbody></table>
+  </tbody></table></div>
 </section>
 <script>
 function updateCount(){const n=document.querySelectorAll('.app-check:checked').length;document.getElementById('selectedCount').textContent=n+' selected';}
 function toggleAll(on){document.querySelectorAll('.app-check:not(:disabled)').forEach(x=>x.checked=on);updateCount();}
+function fillReviewer(sel){const o=sel.options[sel.selectedIndex]; if(!o || !o.dataset.email)return; ['title','first','last','email','phone'].forEach(k=>{const el=document.getElementById('reviewer_'+k); if(el)el.value=o.dataset[k]||'';});}
 updateCount();
 </script>
 {% endblock %}

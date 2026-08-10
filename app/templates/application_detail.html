@@ -27,7 +27,7 @@
     {% if is_direct_irb %}
       <div class="route-state direct"><strong>Direct IRB Secretariat pathway.</strong> This application does not require a College Scientific Committee review.</div>
     {% elif uses_college_scientific_review %}
-      <div class="route-state college"><strong>College Scientific Committee pathway.</strong> College documents are activated only after Secretariat approval.</div>
+      <div class="route-state college"><strong>College Scientific Committee pathway.</strong> The College can monitor the first submission while it is with the Secretariat. Once the Secretariat marks it complete, the documents are forwarded automatically to the Scientific Committee.</div>
     {% endif %}
     {% if can_docs %}
       <div class="access granted">Document access is active for your role.</div>
@@ -88,59 +88,46 @@
 
 {% if can_docs %}
 <section class="card">
-  <h2>Application documents</h2>
-  <table>
-    <thead><tr><th>Document type</th><th>File</th><th>Version</th><th>Uploaded</th></tr></thead>
-    <tbody>
-    {% for d in documents %}
-      <tr><td>{{ d.document_type }}</td><td><a href="/documents/{{ d.id }}/download">{{ d.original_name }}</a></td><td>v{{ d.version }}</td><td>{{ d.uploaded_at.strftime('%d %b %Y %H:%M') }}</td></tr>
-    {% else %}<tr><td colspan="4" class="empty">No documents are available.</td></tr>{% endfor %}
-    </tbody>
-  </table>
+  <div class="sectionhead"><div><span class="eyebrow">Document history</span><h2>Fresh submission documents</h2></div></div>
+  <table><thead><tr><th>Document type</th><th>File</th><th>Version</th><th>Uploaded</th></tr></thead><tbody>
+  {% for d in fresh_documents %}<tr><td>{{ d.document_type }}</td><td><a href="/documents/{{ d.id }}/download">{{ d.original_name }}</a></td><td>v{{ d.version }}</td><td>{{ d.uploaded_at.strftime('%d %b %Y %H:%M') }}</td></tr>{% else %}<tr><td colspan="4" class="empty">No fresh-submission documents are available.</td></tr>{% endfor %}
+  </tbody></table>
 </section>
+{% if college_revision_documents %}<section class="card revision-card"><div class="sectionhead"><div><span class="eyebrow">College revisions</span><h2>Revised documents submitted directly to the College</h2></div></div><table><thead><tr><th>Round</th><th>Document type</th><th>File</th><th>Version</th><th>Uploaded</th></tr></thead><tbody>{% for d in college_revision_documents %}{% set m=document_stages.get(d.id) %}<tr><td>Revision {{ m.round_no if m else '—' }}</td><td>{{ d.document_type }}</td><td><a href="/documents/{{ d.id }}/download">{{ d.original_name }}</a></td><td>v{{ d.version }}</td><td>{{ d.uploaded_at.strftime('%d %b %Y %H:%M') }}</td></tr>{% endfor %}</tbody></table></section>{% endif %}
+{% if irb_revision_documents %}<section class="card revision-card"><div class="sectionhead"><div><span class="eyebrow">IRB revisions</span><h2>Revised documents for IRB review</h2></div></div><table><thead><tr><th>Round</th><th>Document type</th><th>File</th><th>Version</th><th>Uploaded</th></tr></thead><tbody>{% for d in irb_revision_documents %}{% set m=document_stages.get(d.id) %}<tr><td>Revision {{ m.round_no if m else '—' }}</td><td>{{ d.document_type }}</td><td><a href="/documents/{{ d.id }}/download">{{ d.original_name }}</a></td><td>v{{ d.version }}</td><td>{{ d.uploaded_at.strftime('%d %b %Y %H:%M') }}</td></tr>{% endfor %}</tbody></table></section>{% endif %}
 {% endif %}
 
 {% if user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status in ['submitted_to_irb_secretariat','irb_secretariat_screening'] %}
 <section class="card actioncard navyline">
-  <h2>IRB Secretariat administrative screening</h2>
-  {% if uses_college_scientific_review %}
-    <p>Confirm administrative completeness. If complete, the application becomes visible to {{ app.college.name }} for a controlled request to commence scientific review. Documents remain locked until the Secretariat grants access.</p>
-  {% else %}
-    <p>Confirm administrative completeness. This applicant is from a UCC unit outside the five Scientific Committee Colleges, so a complete application will remain with the Secretariat and proceed directly to IRB review classification.</p>
-  {% endif %}
+  <div class="sectionhead"><div><span class="eyebrow">Initial Secretariat screening</span><h2>Submitted Document Checklist</h2></div></div>
+  <p>Open each submitted file and tick it only after confirming that the document is present and suitable for administrative processing. The application cannot be marked complete until every submitted document is checked and the core required-document list is satisfied.</p>
+  {% if attention_requests %}{% for ar in attention_requests if ar.status == 'pending' %}<div class="alert warning"><strong>{{ app.college.name }} has requested Secretariat attention.</strong> Requested {{ ar.requested_at.strftime('%d %b %Y %H:%M') }}. {{ ar.note or '' }} <form method="post" action="/secretariat/attention/{{ ar.id }}/resolve" class="inline-resolve"><input name="note" placeholder="Resolution note"><button class="btn secondary smallbtn">Acknowledge</button></form></div>{% endfor %}{% endif %}
+  <div class="checklist-required"><h3>Core required items</h3><ul>{% for label,present in required_document_rows %}<li class="{{ 'check-ok' if present else 'check-missing' }}">{{ '✓' if present else '✕' }} {{ label }}</li>{% endfor %}</ul></div>
+  <form method="post" action="/secretariat/{{ app.id }}/checklist">
+    <div class="table-wrap"><table class="checklist-table"><thead><tr><th>Verified</th><th>Document type</th><th>File</th><th>Version</th><th>Uploaded</th><th>Checked</th></tr></thead><tbody>
+    {% for d in documents %}{% set chk=screening_checks.get(d.id) %}<tr><td><input type="checkbox" name="checked_document_ids" value="{{ d.id }}" {% if chk and chk.verified %}checked{% endif %}></td><td>{{ d.document_type }}</td><td><a href="/documents/{{ d.id }}/download" target="_blank">{{ d.original_name }}</a></td><td>v{{ d.version }}</td><td>{{ d.uploaded_at.strftime('%d %b %Y %H:%M') }}</td><td>{% if chk and chk.checked_at %}{{ chk.checked_at.strftime('%d %b %Y %H:%M') }}{% else %}<span class="urgent">Not checked</span>{% endif %}</td></tr>{% else %}<tr><td colspan="6" class="empty">No documents submitted.</td></tr>{% endfor %}
+    </tbody></table></div>
+    <label>Checklist note <span class="optional">optional</span><textarea name="checklist_note" rows="2" placeholder="Administrative note applying to this checklist"></textarea></label>
+    <button class="btn secondary" type="submit">Save Checklist</button>
+  </form>
+  <hr>
+  {% if uses_college_scientific_review %}<p><strong>Routing after completion:</strong> marking this application complete will automatically activate the documents and forward the full record to the <strong>{{ app.college.name }} Scientific Committee</strong>. No separate College access request is required.</p>{% else %}<p><strong>Routing after completion:</strong> this application belongs to another UCC academic/administrative unit and will remain with the IRB Secretariat for direct IRB classification.</p>{% endif %}
   <form method="post" action="/secretariat/{{ app.id }}/screen">
-    <label>Screening note<textarea name="note" rows="3" placeholder="Record missing items, clarification or screening note"></textarea></label>
-    <div class="actions"><button class="btn" name="outcome" value="complete">Mark Administratively Complete</button><button class="btn dangerbtn" name="outcome" value="return">Return to Applicant</button></div>
+    <label>Screening/return note<textarea name="note" rows="3" placeholder="Record a screening note or clearly state corrections when returning the application"></textarea></label>
+    <div class="actions"><button class="btn" name="outcome" value="complete">Mark Complete & {% if uses_college_scientific_review %}Forward to College{% else %}Proceed to IRB{% endif %}</button><button class="btn dangerbtn" name="outcome" value="return">Return to Applicant</button></div>
   </form>
 </section>
 {% endif %}
 
-{% if user.role == 'college_admin' and app.status == 'visible_to_college' %}
-<section class="card actioncard">
-  <h2>Request authority to commence scientific review</h2>
-  <p>The application record is visible to your College, but the substantive documents remain locked until the IRB Secretariat activates access.</p>
-  <form method="post" action="/college/{{ app.id }}/request-access"><label>Optional note<textarea name="note" rows="3"></textarea></label><button class="btn" type="submit">Request Review Access</button></form>
-</section>
+{% if user.role == 'college_admin' and app.status in ['submitted_to_irb_secretariat','irb_secretariat_screening'] %}
+<section class="card actioncard attention-card"><h2>Application still with IRB Secretariat</h2><p>This first submission is visible to the College for monitoring, but the documents remain locked until Secretariat screening is complete.</p>{% set pending = namespace(found=false) %}{% for ar in attention_requests %}{% if ar.status == 'pending' %}{% set pending.found=true %}<div class="alert info">IRB attention was requested on {{ ar.requested_at.strftime('%d %b %Y %H:%M') }}.</div>{% endif %}{% endfor %}{% if not pending.found %}<form method="post" action="/college/{{ app.id }}/request-secretariat-attention"><label>Optional note<textarea name="note" rows="2" placeholder="Please attend to this submission awaiting first screening."></textarea></label><button class="btn" type="submit">Request IRB Secretariat Attention</button></form>{% endif %}</section>
 {% endif %}
 
-{% if user.role in ['irb_secretariat','irb_chair','superadmin'] %}
-  {% for r in access_requests %}{% if r.status == 'pending' %}
-  <section class="card actioncard redline">
-    <h2>College review access request</h2>
-    <p>Requested {{ r.requested_at.strftime('%d %b %Y %H:%M') }}. {{ r.request_note or '' }}</p>
-    <form method="post" action="/secretariat/access/{{ r.id }}/decide">
-      <label>Decision note<textarea name="note" rows="3"></textarea></label>
-      <div class="actions"><button class="btn" name="decision" value="grant">Grant & Activate Documents</button><button class="btn dangerbtn" name="decision" value="withhold">Withhold Access</button></div>
-    </form>
-  </section>
-  {% endif %}{% endfor %}
-{% endif %}
-
-{% if user.role == 'college_admin' and app.status in ['awaiting_college_reviewer_assignment','under_college_scientific_review','college_revised_submission_received'] %}
+{% if user.role == 'college_admin' and app.status in ['forwarded_to_college_scientific_committee','awaiting_college_reviewer_assignment','under_college_scientific_review','college_revised_submission_received'] %}
 <section class="card actioncard">
   <h2>College scientific reviewer assignment</h2>
-  <p>Reviewer assignments are now managed from the College receiving queue. You can select this application together with other ready applications and send one secure assignment workspace to the reviewer.</p>
-  <a class="btn" href="/college/review-queue">Open College Review Assignment Queue</a>
+  <p>Use the College review queue to select this application together with other fresh or revised work. Enter the reviewer details and email, then send one secure assignment link containing the required document package for each selected applicant.</p>
+  <a class="btn" href="/college/review-queue">Email Documents for Review</a>
 </section>
 {% endif %}
 

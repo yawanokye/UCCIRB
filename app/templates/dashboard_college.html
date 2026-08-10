@@ -1,12 +1,44 @@
 {% extends 'base.html' %}
 {% block title %}College Scientific Committee · UCC Ethics Portal{% endblock %}
 {% block content %}
-<div class="pagehead"><div><span class="eyebrow">College Scientific Committee</span><h1>{{ user.college.name }}</h1><p>Applications become visible after Secretariat screening. Research documents remain locked until the Secretariat grants review authority.</p></div><a class="btn" href="/college/review-queue">Reviewer Assignment Queue</a></div>
-<div class="metrics">
-  <div><b>{{ apps|length }}</b><span>Visible applications</span></div>
-  <div><b>{{ apps|selectattr('status','equalto','visible_to_college')|list|length }}</b><span>Available to request</span></div>
-  <div><b>{{ apps|selectattr('status','equalto','under_college_scientific_review')|list|length }}</b><span>Under scientific review</span></div>
-  <div><b>{{ apps|selectattr('status','equalto','awaiting_college_decision')|list|length }}</b><span>Awaiting committee decision</span></div>
+<div class="pagehead">
+  <div><span class="eyebrow">College Scientific Committee</span><h1>{{ user.college.name }}</h1><p>First submissions are received and checked centrally by the IRB Secretariat. Once marked administratively complete, the full application is forwarded automatically to this Scientific Committee. All later scientific-review revisions return directly to the College.</p></div>
+  <a class="btn" href="/college/review-queue">Email Documents for Review</a>
 </div>
-<div class="card"><table><thead><tr><th>Reference</th><th>Applicant</th><th>Research title</th><th>Status</th><th>Action</th></tr></thead><tbody>{% for a in apps %}<tr><td>{{ a.reference_no }}</td><td>{{ a.applicant.full_name }}</td><td>{{ a.title }}</td><td><span class="status {{ a.status }}">{{ a.status.replace('_',' ').title() }}</span></td><td><a href="/applications/{{ a.id }}">Open record</a></td></tr>{% else %}<tr><td colspan="5" class="empty">No applications are currently visible to this College.</td></tr>{% endfor %}</tbody></table></div>
+<div class="metrics">
+  <div><b>{{ pending_initial|length }}</b><span>Still at IRB Secretariat</span></div>
+  <div><b>{{ fresh_apps|length }}</b><span>Fresh College records</span></div>
+  <div><b>{{ revised_apps|length }}</b><span>Revised submissions</span></div>
+  <div><b>{{ apps|selectattr('status','equalto','awaiting_college_decision')|list|length }}</b><span>Awaiting Committee decision</span></div>
+</div>
+
+<section class="card attention-card">
+  <div class="sectionhead"><div><span class="eyebrow">Initial receipt watch</span><h2>Submitted applications still with the IRB Secretariat</h2></div></div>
+  <p class="hint">The College can see these first submissions for monitoring only. Documents remain unavailable until the Secretariat completes its checklist and forwards the application. If a submission appears unattended, request Secretariat attention.</p>
+  <div class="table-wrap"><table><thead><tr><th>Reference</th><th>Applicant</th><th>Research title</th><th>Submitted</th><th>Status</th><th>Action</th></tr></thead><tbody>
+  {% for a in pending_initial %}
+    <tr><td><a href="/applications/{{ a.id }}">{{ a.reference_no }}</a></td><td>{{ a.applicant.full_name }}</td><td>{{ a.title }}</td><td>{{ a.submitted_at.strftime('%d %b %Y %H:%M') if a.submitted_at else '—' }}</td><td><span class="status {{ a.status }}">{{ a.status.replace('_',' ').title() }}</span></td><td>
+      {% if attention_by_app.get(a.id) %}<span class="chip warning-chip">Attention requested {{ attention_by_app[a.id].requested_at.strftime('%d %b') }}</span>
+      {% else %}<form method="post" action="/college/{{ a.id }}/request-secretariat-attention" class="mini-action"><input type="hidden" name="note" value="Please attend to this College application awaiting initial IRB Secretariat screening."><button class="btn secondary smallbtn" type="submit">Request IRB Attention</button></form>{% endif %}
+    </td></tr>
+  {% else %}<tr><td colspan="6" class="empty">No first submissions from this College are currently waiting at the IRB Secretariat.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+
+<section class="card">
+  <div class="sectionhead"><div><span class="eyebrow">Fresh submissions</span><h2>Forwarded for College Scientific Review</h2></div><a href="/college/review-queue" class="btn secondary">Open Assignment Queue</a></div>
+  <div class="table-wrap"><table><thead><tr><th>Reference</th><th>Applicant</th><th>Research title</th><th>Status</th><th>Updated</th><th></th></tr></thead><tbody>
+  {% for a in fresh_apps %}<tr><td>{{ a.reference_no }}</td><td>{{ a.applicant.full_name }}</td><td>{{ a.title }}</td><td><span class="status {{ a.status }}">{{ a.status.replace('_',' ').title() }}</span></td><td>{{ a.updated_at.strftime('%d %b %Y') }}</td><td><a href="/applications/{{ a.id }}">Open record</a></td></tr>
+  {% else %}<tr><td colspan="6" class="empty">No fresh scientific-review records at present.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+
+<section class="card revision-card">
+  <div class="sectionhead"><div><span class="eyebrow">Revised submissions</span><h2>Returned Directly by Applicants to the College</h2></div><a href="/college/review-queue#revised" class="btn secondary">Assign Revised Work</a></div>
+  <p class="hint">After the first IRB Secretariat screening, revision communication stays between the College Scientific Committee and the applicant. These revisions do not return to the Secretariat until the College makes its final scientific recommendation.</p>
+  <div class="table-wrap"><table><thead><tr><th>Reference</th><th>Applicant</th><th>Research title</th><th>Status</th><th>Updated</th><th></th></tr></thead><tbody>
+  {% for a in revised_apps %}<tr><td>{{ a.reference_no }}</td><td>{{ a.applicant.full_name }}</td><td>{{ a.title }}</td><td><span class="status {{ a.status }}">{{ a.status.replace('_',' ').title() }}</span></td><td>{{ a.updated_at.strftime('%d %b %Y %H:%M') }}</td><td><a href="/applications/{{ a.id }}">Open revision</a></td></tr>
+  {% else %}<tr><td colspan="6" class="empty">No revised submissions waiting in this College.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
 {% endblock %}
