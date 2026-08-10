@@ -1,44 +1,100 @@
 {% extends 'base.html' %}
 {% block title %}College Scientific Committee · UCC Ethics Portal{% endblock %}
 {% block content %}
-<div class="pagehead">
-  <div><span class="eyebrow">College Scientific Committee</span><h1>{{ user.college.name }}</h1><p>First submissions are received and checked centrally by the IRB Secretariat. Once marked administratively complete, the full application is forwarded automatically to this Scientific Committee. All later scientific-review revisions return directly to the College.</p></div>
-  <a class="btn" href="/college/review-queue">Email Documents for Review</a>
+<div class="pagehead compact-pagehead">
+  <div>
+    <span class="eyebrow">College Scientific Committee</span>
+    <h1>{{ user.college.name }}</h1>
+    <p>Initial submissions are screened by the IRB Secretariat. Once complete, they are forwarded automatically to the College. All scientific-review revisions return directly to this College until the final scientific recommendation is sent back to the IRB.</p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="/college/review-queue">Review Assignment Queue</a>
+  </div>
 </div>
-<div class="metrics">
+
+<div class="metrics college-metrics">
   <div><b>{{ pending_initial|length }}</b><span>Still at IRB Secretariat</span></div>
-  <div><b>{{ fresh_apps|length }}</b><span>Fresh College records</span></div>
-  <div><b>{{ revised_apps|length }}</b><span>Revised submissions</span></div>
-  <div><b>{{ apps|selectattr('status','equalto','awaiting_college_decision')|list|length }}</b><span>Awaiting Committee decision</span></div>
+  <div><b>{{ fresh_apps|length }}</b><span>Fresh awaiting assignment</span></div>
+  <div class="metric-revision"><b>{{ revised_apps|length }}</b><span>Revised awaiting action</span></div>
+  <div><b>{{ active_review_apps|length }}</b><span>Under scientific review</span></div>
+  <div><b>{{ awaiting_decision_apps|length }}</b><span>Awaiting Committee decision</span></div>
 </div>
 
-<section class="card attention-card">
-  <div class="sectionhead"><div><span class="eyebrow">Initial receipt watch</span><h2>Submitted applications still with the IRB Secretariat</h2></div></div>
-  <p class="hint">The College can see these first submissions for monitoring only. Documents remain unavailable until the Secretariat completes its checklist and forwards the application. If a submission appears unattended, request Secretariat attention.</p>
-  <div class="table-wrap"><table><thead><tr><th>Reference</th><th>Applicant</th><th>Research title</th><th>Submitted</th><th>Status</th><th>Action</th></tr></thead><tbody>
-  {% for a in pending_initial %}
-    <tr><td><a href="/applications/{{ a.id }}">{{ a.reference_no }}</a></td><td>{{ a.applicant.full_name }}</td><td>{{ a.title }}</td><td>{{ a.submitted_at.strftime('%d %b %Y %H:%M') if a.submitted_at else '—' }}</td><td><span class="status {{ a.status }}">{{ a.status.replace('_',' ').title() }}</span></td><td>
-      {% if attention_by_app.get(a.id) %}<span class="chip warning-chip">Attention requested {{ attention_by_app[a.id].requested_at.strftime('%d %b') }}</span>
-      {% else %}<form method="post" action="/college/{{ a.id }}/request-secretariat-attention" class="mini-action"><input type="hidden" name="note" value="Please attend to this College application awaiting initial IRB Secretariat screening."><button class="btn secondary smallbtn" type="submit">Request IRB Attention</button></form>{% endif %}
-    </td></tr>
-  {% else %}<tr><td colspan="6" class="empty">No first submissions from this College are currently waiting at the IRB Secretariat.</td></tr>{% endfor %}
-  </tbody></table></div>
+<section class="college-action-strip">
+  <a class="college-action-card" href="/college/review-queue">
+    <span>Fresh submissions</span><strong>{{ fresh_apps|length }}</strong><small>Select applications, documents and reviewer details.</small>
+  </a>
+  <a class="college-action-card revision" href="/college/review-queue#revised">
+    <span>Revised submissions</span><strong>{{ revised_apps|length }}</strong><small>Assign a new review or return to previous reviewer(s).</small>
+  </a>
+  <a class="college-action-card decision" href="#committee-decisions">
+    <span>Committee decision</span><strong>{{ awaiting_decision_apps|length }}</strong><small>Applications ready for the College's formal decision.</small>
+  </a>
 </section>
 
-<section class="card">
-  <div class="sectionhead"><div><span class="eyebrow">Fresh submissions</span><h2>Forwarded for College Scientific Review</h2></div><a href="/college/review-queue" class="btn secondary">Open Assignment Queue</a></div>
-  <div class="table-wrap"><table><thead><tr><th>Reference</th><th>Applicant</th><th>Research title</th><th>Status</th><th>Updated</th><th></th></tr></thead><tbody>
-  {% for a in fresh_apps %}<tr><td>{{ a.reference_no }}</td><td>{{ a.applicant.full_name }}</td><td>{{ a.title }}</td><td><span class="status {{ a.status }}">{{ a.status.replace('_',' ').title() }}</span></td><td>{{ a.updated_at.strftime('%d %b %Y') }}</td><td><a href="/applications/{{ a.id }}">Open record</a></td></tr>
-  {% else %}<tr><td colspan="6" class="empty">No fresh scientific-review records at present.</td></tr>{% endfor %}
-  </tbody></table></div>
+{% if revised_apps %}
+<section class="card revision-card priority-section" id="revised-submissions">
+  <div class="sectionhead">
+    <div><span class="eyebrow">Action required</span><h2>Revised Submissions</h2></div>
+    <a href="/college/review-queue#revised" class="btn">Assign Revised Work</a>
+  </div>
+  <p class="hint">These are revised documents returned directly by applicants. Choose whether to send the revision to a previous reviewer, assign another reviewer, or mark it administratively reviewed and proceed to the College Committee decision.</p>
+  <div class="table-wrap"><table class="compact-table">
+    <thead><tr><th>Reference</th><th>Applicant</th><th>Research title</th><th>Previous reviewer(s)</th><th>Received</th><th>Action</th></tr></thead>
+    <tbody>
+    {% for a in revised_apps %}{% set prevs=previous_reviewers_by_app.get(a.id,[]) %}
+      <tr>
+        <td><a href="/applications/{{ a.id }}">{{ a.reference_no }}</a></td>
+        <td>{{ a.applicant.full_name }}</td>
+        <td>{{ a.title }}</td>
+        <td>{% for r in prevs %}<a class="reviewer-chip" href="/applications/{{ a.id }}#revision-disposition">{{ r.name }}</a>{% else %}<span class="muted">None recorded</span>{% endfor %}</td>
+        <td>{{ a.updated_at.strftime('%d %b %Y %H:%M') }}</td>
+        <td><div class="row-actions"><a class="btn secondary smallbtn" href="/applications/{{ a.id }}#revision-disposition">Previous reviewer / Admin review</a><a class="btn secondary smallbtn" href="/college/review-queue#revised">Assign reviewer</a></div></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
 </section>
+{% endif %}
 
-<section class="card revision-card">
-  <div class="sectionhead"><div><span class="eyebrow">Revised submissions</span><h2>Returned Directly by Applicants to the College</h2></div><a href="/college/review-queue#revised" class="btn secondary">Assign Revised Work</a></div>
-  <p class="hint">After the first IRB Secretariat screening, revision communication stays between the College Scientific Committee and the applicant. These revisions do not return to the Secretariat until the College makes its final scientific recommendation.</p>
-  <div class="table-wrap"><table><thead><tr><th>Reference</th><th>Applicant</th><th>Research title</th><th>Previous reviewer(s)</th><th>Status</th><th>Updated</th><th></th></tr></thead><tbody>
-  {% for a in revised_apps %}{% set prevs=previous_reviewers_by_app.get(a.id,[]) %}<tr><td>{{ a.reference_no }}</td><td>{{ a.applicant.full_name }}</td><td>{{ a.title }}</td><td>{% for r in prevs %}<a class="reviewer-chip" href="/applications/{{ a.id }}">{{ r.name }}</a>{% else %}<span class="muted">None recorded</span>{% endfor %}</td><td><span class="status {{ a.status }}">{{ a.status.replace('_',' ').title() }}</span></td><td>{{ a.updated_at.strftime('%d %b %Y %H:%M') }}</td><td><a href="/applications/{{ a.id }}">Decide re-review</a></td></tr>
-  {% else %}<tr><td colspan="7" class="empty">No revised submissions waiting in this College.</td></tr>{% endfor %}
-  </tbody></table></div>
-</section>
+<div class="college-two-column">
+  <section class="card">
+    <div class="sectionhead"><div><span class="eyebrow">First-submission monitoring</span><h2>Still with IRB Secretariat</h2></div></div>
+    <p class="hint">The College can monitor first submissions, but documents remain locked until the Secretariat completes screening. Use the attention request only when a submission appears unattended.</p>
+    <div class="table-wrap"><table class="compact-table"><thead><tr><th>Reference</th><th>Applicant</th><th>Submitted</th><th>Action</th></tr></thead><tbody>
+    {% for a in pending_initial %}
+      <tr><td><a href="/applications/{{ a.id }}">{{ a.reference_no }}</a></td><td>{{ a.applicant.full_name }}</td><td>{{ a.submitted_at.strftime('%d %b %Y') if a.submitted_at else '—' }}</td><td>{% if attention_by_app.get(a.id) %}<span class="chip warning-chip">Attention requested</span>{% else %}<form method="post" action="/college/{{ a.id }}/request-secretariat-attention" class="mini-action"><input type="hidden" name="note" value="Please attend to this College application awaiting initial IRB Secretariat screening."><button class="btn secondary smallbtn" type="submit">Request IRB Attention</button></form>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="4" class="empty">No first submissions are waiting at the IRB Secretariat.</td></tr>{% endfor %}
+    </tbody></table></div>
+  </section>
+
+  <section class="card">
+    <div class="sectionhead"><div><span class="eyebrow">Fresh submissions</span><h2>Awaiting Reviewer Assignment</h2></div><a href="/college/review-queue" class="btn secondary smallbtn">Open Queue</a></div>
+    <div class="table-wrap"><table class="compact-table"><thead><tr><th>Reference</th><th>Applicant</th><th>Research title</th><th>Action</th></tr></thead><tbody>
+    {% for a in fresh_apps %}
+      <tr><td><a href="/applications/{{ a.id }}">{{ a.reference_no }}</a></td><td>{{ a.applicant.full_name }}</td><td>{{ a.title }}</td><td><a href="/college/review-queue" class="btn secondary smallbtn">Assign</a></td></tr>
+    {% else %}<tr><td colspan="4" class="empty">No fresh submissions are waiting for reviewer assignment.</td></tr>{% endfor %}
+    </tbody></table></div>
+  </section>
+</div>
+
+<div class="college-two-column">
+  <section class="card">
+    <div class="sectionhead"><div><span class="eyebrow">Reviews in progress</span><h2>Under Scientific Review</h2></div></div>
+    <div class="table-wrap"><table class="compact-table"><thead><tr><th>Reference</th><th>Applicant</th><th>Submission</th><th>Updated</th></tr></thead><tbody>
+    {% for a in active_review_apps %}
+      <tr><td><a href="/applications/{{ a.id }}">{{ a.reference_no }}</a></td><td>{{ a.applicant.full_name }}</td><td>{% if a.id in revision_ids %}<span class="chip revision-chip">Revised</span>{% else %}<span class="chip">Fresh</span>{% endif %}</td><td>{{ a.updated_at.strftime('%d %b %Y') }}</td></tr>
+    {% else %}<tr><td colspan="4" class="empty">No application is currently under scientific review.</td></tr>{% endfor %}
+    </tbody></table></div>
+  </section>
+
+  <section class="card" id="committee-decisions">
+    <div class="sectionhead"><div><span class="eyebrow">Committee action</span><h2>Awaiting College Decision</h2></div></div>
+    <div class="table-wrap"><table class="compact-table"><thead><tr><th>Reference</th><th>Applicant</th><th>Research title</th><th>Action</th></tr></thead><tbody>
+    {% for a in awaiting_decision_apps %}
+      <tr><td><a href="/applications/{{ a.id }}">{{ a.reference_no }}</a></td><td>{{ a.applicant.full_name }}</td><td>{{ a.title }}</td><td><a class="btn secondary smallbtn" href="/applications/{{ a.id }}">Record decision</a></td></tr>
+    {% else %}<tr><td colspan="4" class="empty">No application is waiting for a College Committee decision.</td></tr>{% endfor %}
+    </tbody></table></div>
+  </section>
+</div>
 {% endblock %}

@@ -1,0 +1,6 @@
+{% extends 'base.html' %}
+{% block title %}{{ document.original_name }} · Document Viewer{% endblock %}
+{% block content %}
+<div class="pagehead viewer-pagehead"><div><span class="eyebrow">Secure document viewer</span><h1>{{ document.document_type }}</h1><p>{{ document.original_name }} · v{{ document.version }} · {{ app.reference_no }}</p></div><div class="actions"><a class="btn secondary" href="/applications/{{ app.id }}">Back to Application</a><a class="btn" href="/documents/{{ document.id }}/download">Download Original</a></div></div>
+<section class="card document-view-card"><iframe class="document-frame full" src="/documents/{{ document.id }}/inline" title="{{ document.original_name }}"></iframe></section>
+{% endblock %}

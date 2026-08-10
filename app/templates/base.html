@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#1F2056">
+  <meta name="csrf-token" content="{{ request.session.get('csrf_token', '') }}">
   <title>{% block title %}UCC Ethics Portal{% endblock %}</title>
   <link rel="icon" type="image/png" href="/static/img/ucc-brand.png">
   <link rel="stylesheet" href="/static/app.css">
@@ -54,5 +55,20 @@
   <strong>University of Cape Coast</strong><br>
   Institutional Review Board · Research Ethics Governance Portal
 </footer>
+<script>
+(function(){
+  const meta=document.querySelector('meta[name="csrf-token"]');
+  const token=meta?meta.content:'';
+  if(!token)return;
+  document.querySelectorAll('form').forEach(function(form){
+    const method=(form.getAttribute('method')||'get').toLowerCase();
+    if(method!=='post')return;
+    if(form.querySelector('input[name="csrf_token"]'))return;
+    const input=document.createElement('input');
+    input.type='hidden'; input.name='csrf_token'; input.value=token;
+    form.appendChild(input);
+  });
+})();
+</script>
 </body>
 </html>

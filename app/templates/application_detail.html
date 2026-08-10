@@ -44,6 +44,17 @@
 <section class="card actioncard">
   <h2>{% if app.status in ['college_revision_required','irb_revision_required'] %}Upload revised documents{% else %}Upload supporting documents{% endif %}</h2>
   {% if app.status == 'returned_to_applicant_admin' and app.secretariat_note %}<div class="alert warning"><strong>Secretariat request:</strong> {{ app.secretariat_note }}</div>{% endif %}
+  {% if app.status == 'returned_to_applicant_admin' and screening_checks %}
+  <div class="applicant-screening-comments">
+    <strong>Document-specific Secretariat comments</strong>
+    <p>Correct or replace the affected document(s), then resubmit the application to the IRB Secretariat.</p>
+    <div class="screening-comment-list">
+      {% for d in fresh_documents %}{% set chk=screening_checks.get(d.id) %}{% if chk and chk.note and not chk.verified %}
+      <div><span>{{ d.document_type }}</span><b>{{ d.original_name }}</b><p>{{ chk.note }}</p><a href="/documents/{{ d.id }}/view">Open document in viewer</a></div>
+      {% endif %}{% endfor %}
+    </div>
+  </div>
+  {% endif %}
   <div class="upload-resource-note"><span>Need a form?</span><a href="/applicant-guide#resources">Open UCC-IRB Forms & Templates</a><a href="/applicant-guide#required-documents">View Required Documents</a></div>
   <div class="upload-guidance-grid">
     <div>
@@ -113,32 +124,100 @@
 <section class="card">
   <div class="sectionhead"><div><span class="eyebrow">Document history</span><h2>Fresh submission documents</h2></div></div>
   <table><thead><tr><th>Document type</th><th>File</th><th>Version</th><th>Uploaded</th></tr></thead><tbody>
-  {% for d in fresh_documents %}<tr><td>{{ d.document_type }}</td><td><a href="/documents/{{ d.id }}/download">{{ d.original_name }}</a></td><td>v{{ d.version }}</td><td>{{ d.uploaded_at.strftime('%d %b %Y %H:%M') }}</td></tr>{% else %}<tr><td colspan="4" class="empty">No fresh-submission documents are available.</td></tr>{% endfor %}
+  {% for d in fresh_documents %}<tr><td>{{ d.document_type }}</td><td><a href="/documents/{{ d.id }}/view">{{ d.original_name }}</a><br><small><a href="/documents/{{ d.id }}/download">Download original</a></small></td><td>v{{ d.version }}</td><td>{{ d.uploaded_at.strftime('%d %b %Y %H:%M') }}</td></tr>{% else %}<tr><td colspan="4" class="empty">No fresh-submission documents are available.</td></tr>{% endfor %}
   </tbody></table>
 </section>
-{% if college_revision_documents %}<section class="card revision-card"><div class="sectionhead"><div><span class="eyebrow">College revisions</span><h2>Revised documents submitted directly to the College</h2></div></div><table><thead><tr><th>Round</th><th>Document type</th><th>File</th><th>Version</th><th>Uploaded</th></tr></thead><tbody>{% for d in college_revision_documents %}{% set m=document_stages.get(d.id) %}<tr><td>Revision {{ m.round_no if m else '—' }}</td><td>{{ d.document_type }}</td><td><a href="/documents/{{ d.id }}/download">{{ d.original_name }}</a></td><td>v{{ d.version }}</td><td>{{ d.uploaded_at.strftime('%d %b %Y %H:%M') }}</td></tr>{% endfor %}</tbody></table></section>{% endif %}
-{% if irb_revision_documents %}<section class="card revision-card"><div class="sectionhead"><div><span class="eyebrow">IRB revisions</span><h2>Revised documents for IRB review</h2></div></div><table><thead><tr><th>Round</th><th>Document type</th><th>File</th><th>Version</th><th>Uploaded</th></tr></thead><tbody>{% for d in irb_revision_documents %}{% set m=document_stages.get(d.id) %}<tr><td>Revision {{ m.round_no if m else '—' }}</td><td>{{ d.document_type }}</td><td><a href="/documents/{{ d.id }}/download">{{ d.original_name }}</a></td><td>v{{ d.version }}</td><td>{{ d.uploaded_at.strftime('%d %b %Y %H:%M') }}</td></tr>{% endfor %}</tbody></table></section>{% endif %}
+{% if college_revision_documents %}<section class="card revision-card"><div class="sectionhead"><div><span class="eyebrow">College revisions</span><h2>Revised documents submitted directly to the College</h2></div></div><table><thead><tr><th>Round</th><th>Document type</th><th>File</th><th>Version</th><th>Uploaded</th></tr></thead><tbody>{% for d in college_revision_documents %}{% set m=document_stages.get(d.id) %}<tr><td>Revision {{ m.round_no if m else '—' }}</td><td>{{ d.document_type }}</td><td><a href="/documents/{{ d.id }}/view">{{ d.original_name }}</a><br><small><a href="/documents/{{ d.id }}/download">Download original</a></small></td><td>v{{ d.version }}</td><td>{{ d.uploaded_at.strftime('%d %b %Y %H:%M') }}</td></tr>{% endfor %}</tbody></table></section>{% endif %}
+{% if irb_revision_documents %}<section class="card revision-card"><div class="sectionhead"><div><span class="eyebrow">IRB revisions</span><h2>Revised documents for IRB review</h2></div></div><table><thead><tr><th>Round</th><th>Document type</th><th>File</th><th>Version</th><th>Uploaded</th></tr></thead><tbody>{% for d in irb_revision_documents %}{% set m=document_stages.get(d.id) %}<tr><td>Revision {{ m.round_no if m else '—' }}</td><td>{{ d.document_type }}</td><td><a href="/documents/{{ d.id }}/view">{{ d.original_name }}</a><br><small><a href="/documents/{{ d.id }}/download">Download original</a></small></td><td>v{{ d.version }}</td><td>{{ d.uploaded_at.strftime('%d %b %Y %H:%M') }}</td></tr>{% endfor %}</tbody></table></section>{% endif %}
 {% endif %}
 
 {% if user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status in ['submitted_to_irb_secretariat','irb_secretariat_screening'] %}
-<section class="card actioncard navyline">
-  <div class="sectionhead"><div><span class="eyebrow">Initial Secretariat screening</span><h2>Submitted Document Checklist</h2></div></div>
-  <p>Open each submitted file and tick it only after confirming that the document is present and suitable for administrative processing. The application cannot be marked complete until every submitted document is checked and the core required-document list is satisfied.</p>
-  {% if attention_requests %}{% for ar in attention_requests if ar.status == 'pending' %}<div class="alert warning"><strong>{{ app.college.name }} has requested Secretariat attention.</strong> Requested {{ ar.requested_at.strftime('%d %b %Y %H:%M') }}. {{ ar.note or '' }} <form method="post" action="/secretariat/attention/{{ ar.id }}/resolve" class="inline-resolve"><input name="note" placeholder="Resolution note"><button class="btn secondary smallbtn">Acknowledge</button></form></div>{% endfor %}{% endif %}
-  <div class="checklist-required"><h3>Core required items</h3><ul>{% for label,present in required_document_rows %}<li class="{{ 'check-ok' if present else 'check-missing' }}">{{ '✓' if present else '✕' }} {{ label }}</li>{% endfor %}</ul></div>
-  <form method="post" action="/secretariat/{{ app.id }}/checklist">
-    <div class="table-wrap"><table class="checklist-table"><thead><tr><th>Verified</th><th>Document type</th><th>File</th><th>Version</th><th>Uploaded</th><th>Checked</th></tr></thead><tbody>
-    {% for d in documents %}{% set chk=screening_checks.get(d.id) %}<tr><td><input type="checkbox" name="checked_document_ids" value="{{ d.id }}" {% if chk and chk.verified %}checked{% endif %}></td><td>{{ d.document_type }}</td><td><a href="/documents/{{ d.id }}/download" target="_blank">{{ d.original_name }}</a></td><td>v{{ d.version }}</td><td>{{ d.uploaded_at.strftime('%d %b %Y %H:%M') }}</td><td>{% if chk and chk.checked_at %}{{ chk.checked_at.strftime('%d %b %Y %H:%M') }}{% else %}<span class="urgent">Not checked</span>{% endif %}</td></tr>{% else %}<tr><td colspan="6" class="empty">No documents submitted.</td></tr>{% endfor %}
-    </tbody></table></div>
-    <label>Checklist note <span class="optional">optional</span><textarea name="checklist_note" rows="2" placeholder="Administrative note applying to this checklist"></textarea></label>
-    <button class="btn secondary" type="submit">Save Checklist</button>
+<section class="card actioncard navyline secretariat-screening-card screening-cockpit">
+  <div class="screening-titlebar">
+    <div>
+      <span class="eyebrow">Initial Secretariat screening</span>
+      <h2>Fresh Submission Review</h2>
+      <p>Inspect the latest first-submission documents, record document-specific comments where necessary, then either forward the complete application or return it to the applicant for correction.</p>
+    </div>
+    <div class="screening-progress-summary">
+      <span><b>{{ screening_documents|length }}</b><small>documents</small></span>
+      <span><b>{{ required_document_rows|length }}</b><small>core checks</small></span>
+    </div>
+  </div>
+
+  {% if attention_requests %}{% for ar in attention_requests if ar.status == 'pending' %}
+  <div class="alert warning screening-attention"><div><strong>{{ app.college.name }} has requested Secretariat attention.</strong><small>Requested {{ ar.requested_at.strftime('%d %b %Y %H:%M') }}{% if ar.note %} · {{ ar.note }}{% endif %}</small></div><form method="post" action="/secretariat/attention/{{ ar.id }}/resolve" class="inline-resolve"><input name="note" placeholder="Resolution note"><button class="btn secondary smallbtn">Acknowledge</button></form></div>
+  {% endfor %}{% endif %}
+
+  <div class="required-strip" aria-label="Core required documents">
+    {% for label,present in required_document_rows %}<span class="required-pill {{ 'ok' if present else 'missing' }}"><i>{{ '✓' if present else '!' }}</i>{{ label }}</span>{% endfor %}
+  </div>
+
+  <form method="post" action="/secretariat/{{ app.id }}/checklist" id="secretariatScreeningForm">
+    <div class="screening-workbench">
+      <aside class="screening-doc-nav">
+        <div class="screening-pane-head"><div><strong>Submitted documents</strong><small>Select a file to inspect</small></div></div>
+        <div class="screening-doc-nav-list">
+        {% for d in screening_documents %}{% set chk=screening_checks.get(d.id) %}
+          <button type="button" class="screening-doc-tab preview-document-btn {% if loop.first %}active{% endif %} {{ 'accepted' if chk and chk.verified else ('needs-action' if chk and chk.note else '') }}" data-preview-url="/documents/{{ d.id }}/inline" data-preview-label="{{ d.document_type }} · {{ d.original_name }}" data-editor-id="screening-editor-{{ d.id }}">
+            <span class="doc-state">{% if chk and chk.verified %}✓{% elif chk and chk.note %}!{% else %}○{% endif %}</span>
+            <span class="doc-tab-copy"><strong>{{ d.document_type }}</strong><small>{{ d.original_name }}</small><em>v{{ d.version }} · {{ d.uploaded_at.strftime('%d %b %Y') }}</em></span>
+          </button>
+        {% else %}<div class="empty compact-empty">No submitted documents.</div>{% endfor %}
+        </div>
+      </aside>
+
+      <section class="screening-preview-pane">
+        <div class="document-frame-toolbar">
+          <div><small>Currently viewing</small><strong id="currentDocumentLabel">{% if screening_documents %}{{ screening_documents[0].document_type }} · {{ screening_documents[0].original_name }}{% else %}No document selected{% endif %}</strong></div>
+          {% if screening_documents %}<a id="openDocumentFull" class="btn secondary smallbtn" href="/documents/{{ screening_documents[0].id }}/view" target="_blank">Open full view</a>{% endif %}
+        </div>
+        {% if screening_documents %}<iframe id="secretariatDocumentFrame" class="document-frame" src="/documents/{{ screening_documents[0].id }}/inline" title="Submitted document preview"></iframe>{% else %}<div class="empty document-frame-empty">No submitted documents are available for screening.</div>{% endif %}
+      </section>
+
+      <aside class="screening-review-pane">
+        <div class="screening-pane-head"><div><strong>Document assessment</strong><small>Comment only on the selected file</small></div></div>
+        {% for d in screening_documents %}{% set chk=screening_checks.get(d.id) %}
+        <div class="screening-comment-editor {% if not loop.first %}is-hidden{% endif %}" id="screening-editor-{{ d.id }}">
+          <div class="selected-doc-card"><strong>{{ d.document_type }}</strong><small>{{ d.original_name }} · v{{ d.version }}</small></div>
+          <label class="screening-suitable"><input type="checkbox" name="checked_document_ids" value="{{ d.id }}" {% if chk and chk.verified %}checked{% endif %}> <span><strong>Suitable for administrative processing</strong><small>Tick only after checking the document.</small></span></label>
+          <label class="comment-label">Comment to applicant <span class="optional">required if unsuitable</span><textarea name="document_note_{{ d.id }}" rows="7" placeholder="State exactly what must be corrected or replaced.">{{ chk.note if chk and chk.note else '' }}</textarea></label>
+          <div class="screening-meta">{% if chk and chk.checked_at %}Last checked {{ chk.checked_at.strftime('%d %b %Y %H:%M') }}{% else %}Not yet checked{% endif %}</div>
+        </div>
+        {% endfor %}
+        {% if screening_documents %}<button class="btn secondary fullwidth" type="submit">Save Checklist & Comments</button>{% endif %}
+      </aside>
+    </div>
   </form>
-  <hr>
-  {% if uses_college_scientific_review %}<p><strong>Routing after completion:</strong> marking this application complete will automatically activate the documents and forward the full record to the <strong>{{ app.college.name }} Scientific Committee</strong>. No separate College access request is required.</p>{% else %}<p><strong>Routing after completion:</strong> this application belongs to another UCC academic/administrative unit and will remain with the IRB Secretariat for direct IRB classification.</p>{% endif %}
-  <form method="post" action="/secretariat/{{ app.id }}/screen">
-    <label>Screening/return note<textarea name="note" rows="3" placeholder="Record a screening note or clearly state corrections when returning the application"></textarea></label>
-    <div class="actions"><button class="btn" name="outcome" value="complete">Mark Complete & {% if uses_college_scientific_review %}Forward to College{% else %}Proceed to IRB{% endif %}</button><button class="btn dangerbtn" name="outcome" value="return">Return to Applicant</button></div>
-  </form>
+
+  <div class="screening-final-decision">
+    <div class="screening-route-box">
+      <span class="eyebrow">Next route</span>
+      {% if uses_college_scientific_review %}<strong>{{ app.college.name }} Scientific Committee</strong><p>When complete, the application and activated documents are forwarded automatically to the College.</p>{% else %}<strong>Direct IRB review pathway</strong><p>This application remains with the IRB Secretariat for IRB review classification.</p>{% endif %}
+    </div>
+    <form method="post" action="/secretariat/{{ app.id }}/screen" class="screening-decision-form">
+      <label>Overall screening note <span class="optional">optional if all documents are suitable</span><textarea name="note" rows="3" placeholder="Add a general instruction if returning the application, or an optional internal screening note."></textarea></label>
+      <div class="decision-actions"><button class="btn" name="outcome" value="complete">Mark Complete & {% if uses_college_scientific_review %}Forward to College{% else %}Proceed to IRB{% endif %}</button><button class="btn dangerbtn" name="outcome" value="return">Return First Submission to Applicant</button></div>
+    </form>
+  </div>
+
+  <script>
+  (function(){
+    const frame=document.getElementById('secretariatDocumentFrame');
+    const label=document.getElementById('currentDocumentLabel');
+    const full=document.getElementById('openDocumentFull');
+    const tabs=[...document.querySelectorAll('.preview-document-btn')];
+    const editors=[...document.querySelectorAll('.screening-comment-editor')];
+    tabs.forEach(function(btn){btn.addEventListener('click',function(){
+      tabs.forEach(b=>b.classList.remove('active')); btn.classList.add('active');
+      editors.forEach(e=>e.classList.add('is-hidden'));
+      const editor=document.getElementById(btn.dataset.editorId); if(editor) editor.classList.remove('is-hidden');
+      if(frame) frame.src=btn.dataset.previewUrl;
+      if(label) label.textContent=btn.dataset.previewLabel;
+      if(full) full.href=btn.dataset.previewUrl.replace('/inline','/view');
+    });});
+  })();
+  </script>
 </section>
 {% endif %}
 
@@ -192,9 +271,9 @@
         </label>
         <label>Review comments<textarea name="comments" rows="8" required placeholder="Provide clear, numbered and actionable comments."></textarea></label>
         <div class="formgrid">
-          <label>Signed/Completed Review Report <span class="urgent">required</span><input type="file" name="report_file" required accept=".pdf,.doc,.docx"></label>
-          <label>Annotated Protocol <span class="optional">optional</span><input type="file" name="annotated_protocol" accept=".pdf,.doc,.docx"></label>
-          <label>Additional Supporting File <span class="optional">optional</span><input type="file" name="supporting_file" accept=".pdf,.doc,.docx,.xls,.xlsx"></label>
+          <label>Signed/Completed Review Report <span class="urgent">required</span><input type="file" name="report_file" required accept=".pdf,.docx"></label>
+          <label>Annotated Protocol <span class="optional">optional</span><input type="file" name="annotated_protocol" accept=".pdf,.docx"></label>
+          <label>Additional Supporting File <span class="optional">optional</span><input type="file" name="supporting_file" accept=".pdf,.docx,.xlsx"></label>
         </div>
         <button class="btn" type="submit">Submit Review Report</button>
       </form>
@@ -229,7 +308,7 @@
 {% endif %}
 
 {% if user.role == 'college_admin' and app.status == 'college_revised_submission_received' %}
-<section class="card actioncard revision-disposition">
+<section class="card actioncard revision-disposition" id="revision-disposition">
   <div class="sectionhead"><div><span class="eyebrow">Revised submission received</span><h2>Decide whether the revision needs reviewer re-check</h2></div></div>
   <p>The applicant's revised documents have returned directly to the College Scientific Committee. Previous-round reviewers are attached below. Select the reviewer(s) only if the revision should be sent back for another scientific check. Otherwise, record an administrative review and proceed to the Committee decision.</p>
   <form method="post" action="/college/{{ app.id }}/revision-disposition" id="revisionDispositionForm">
