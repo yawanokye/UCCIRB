@@ -6,7 +6,8 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import College, Role, User
 from ..services.routing import get_applicant_affiliations
-from ..services.auth import hash_password, verify_password
+from ..services.auth import hash_password, password_needs_rehash, verify_password
+from ..security import (clear_login_failures, log_security_event, login_locked, superadmin_ip_allowed)
 
 router = APIRouter()
 
@@ -28,10 +29,11 @@ def normalise_portal(portal: str | None) -> str:
 
 
 def password_error(password: str) -> str | None:
-    if len(password) < 8:
-        return 'Password must be at least 8 characters long.'
-    if not any(c.isalpha() for c in password) or not any(c.isdigit() for c in password):
-        return 'Password must contain at least one letter and one number.'
+    if len(password) < 10:
+        return 'Password must be at least 10 characters long.'
+    categories = sum([any(c.islower() for c in password), any(c.isupper() for c in password), any(c.isdigit() for c in password), any(not c.isalnum() for c in password)])
+    if categories < 3:
+        return 'Use at least three of these: lowercase letters, uppercase letters, numbers and symbols.'
     return None
 
 
@@ -100,7 +102,9 @@ def register_applicant(
     db.add(user)
     db.commit()
     db.refresh(user)
+    log_security_event(db, request, 'applicant_registered', email=email, user_id=user.id)
 
+    request.session.clear()
     request.session['user_id'] = user.id
     request.session['portal'] = 'applicant'
     return RedirectResponse('/applications/new?welcome=1', status_code=303)
@@ -125,9 +129,18 @@ def login(
     db: Session = Depends(get_db),
 ):
     portal = normalise_portal(portal)
-    user = db.scalar(select(User).where(User.email == email.lower().strip()))
+    email = email.lower().strip()
+    if login_locked(db, request, email):
+        log_security_event(db, request, 'login_blocked', email=email, detail=f'portal={portal}')
+        return request.app.state.templates.TemplateResponse(
+            request, 'login.html',
+            {'error': 'Too many unsuccessful login attempts. Please wait before trying again.', 'portal': portal},
+            status_code=429,
+        )
+    user = db.scalar(select(User).where(User.email == email))
 
     if not user or not user.active or not verify_password(password, user.password_hash):
+        log_security_event(db, request, 'login_failed', email=email, user_id=user.id if user else None, detail=f'portal={portal}')
         return request.app.state.templates.TemplateResponse(
             request,
             'login.html',
@@ -170,6 +183,18 @@ def login(
             status_code=403,
         )
 
+    if user.role == Role.SUPERADMIN.value and not superadmin_ip_allowed(request):
+        log_security_event(db, request, 'superadmin_ip_blocked', email=email, user_id=user.id)
+        return request.app.state.templates.TemplateResponse(
+            request, 'login.html',
+            {'error': 'System Administrator access is not permitted from this network.', 'portal': 'system_admin'},
+            status_code=403,
+        )
+    if password_needs_rehash(user.password_hash):
+        user.password_hash = hash_password(password)
+        db.commit()
+    clear_login_failures(db, request, email)
+    request.session.clear()
     request.session['user_id'] = user.id
     request.session['portal'] = portal
     target = '/system-admin' if portal == 'system_admin' else '/dashboard'
@@ -197,8 +222,17 @@ def system_admin_login(
     password: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    user = db.scalar(select(User).where(User.email == email.lower().strip()))
+    email = email.lower().strip()
+    if login_locked(db, request, email):
+        log_security_event(db, request, 'login_blocked', email=email, detail='portal=system_admin')
+        return request.app.state.templates.TemplateResponse(
+            request, 'login.html',
+            {'error': 'Too many unsuccessful login attempts. Please wait before trying again.', 'portal': 'system_admin'},
+            status_code=429,
+        )
+    user = db.scalar(select(User).where(User.email == email))
     if not user or not user.active or not verify_password(password, user.password_hash):
+        log_security_event(db, request, 'login_failed', email=email, user_id=user.id if user else None, detail='portal=system_admin')
         return request.app.state.templates.TemplateResponse(
             request,
             'login.html',
@@ -206,12 +240,25 @@ def system_admin_login(
             status_code=400,
         )
     if user.role != Role.SUPERADMIN.value:
+        log_security_event(db, request, 'system_admin_role_denied', email=email, user_id=user.id)
         return request.app.state.templates.TemplateResponse(
             request,
             'login.html',
             {'error': 'This login is restricted to authorised System Administrator accounts.', 'portal': 'system_admin'},
             status_code=403,
         )
+    if not superadmin_ip_allowed(request):
+        log_security_event(db, request, 'superadmin_ip_blocked', email=email, user_id=user.id)
+        return request.app.state.templates.TemplateResponse(
+            request, 'login.html',
+            {'error': 'System Administrator access is not permitted from this network.', 'portal': 'system_admin'},
+            status_code=403,
+        )
+    if password_needs_rehash(user.password_hash):
+        user.password_hash = hash_password(password)
+        db.commit()
+    clear_login_failures(db, request, email)
+    request.session.clear()
     request.session['user_id'] = user.id
     request.session['portal'] = 'system_admin'
     return RedirectResponse('/system-admin', status_code=303)
@@ -251,6 +298,7 @@ def change_password(
 
     user.password_hash = hash_password(new_password)
     db.commit()
+    log_security_event(db, request, 'password_changed', email=user.email, user_id=user.id)
     return request.app.state.templates.TemplateResponse(
         request, 'change_password.html', {'user': user, 'error': None, 'success': 'Password changed successfully.'}
     )

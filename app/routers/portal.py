@@ -7,9 +7,11 @@ import io
 import secrets
 import string
 import zipfile
+import mimetypes
+from html import escape as html_escape
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
@@ -49,7 +51,7 @@ from ..models import (
 from ..services.auth import hash_password, require_roles, require_user
 from ..services.certificate import certificate_path, generate_certificate_pdf
 from ..services.email import (college_revision_request_email, college_revision_submitted_email,
-                              gmail_configured, review_assignment_email)
+                              gmail_configured, review_assignment_email, secretariat_return_email)
 from ..services.storage import save_upload, storage_path
 from ..services.workflow import audit, transition
 from ..services.routing import (
@@ -156,9 +158,17 @@ def current_upload_stage(db: Session, app: EthicsApplication):
 
 
 def latest_submission_kind_map(db: Session, application_ids: list[str]):
+    """Return the latest fresh/revision stage for each application.
+
+    V14 deliberately uses both application submission events and document-stage metadata. Older
+    deployments could contain a valid College revision whose ApplicationSubmission row was missing
+    even though the revised files were correctly tagged. That made a genuine revised submission
+    disappear from the College "Revised submissions" queue.
+    """
     result = {app_id: 'fresh' for app_id in application_ids}
     if not application_ids:
         return result
+
     rows = db.scalars(
         select(ApplicationSubmission)
         .where(ApplicationSubmission.application_id.in_(application_ids))
@@ -169,7 +179,45 @@ def latest_submission_kind_map(db: Session, application_ids: list[str]):
         if row.application_id not in seen:
             result[row.application_id] = row.submission_kind
             seen.add(row.application_id)
+
+    # Fallback for legacy/migrated rows: infer the stage from the latest tagged document.
+    unresolved = [app_id for app_id in application_ids if app_id not in seen]
+    if unresolved:
+        metas = db.scalars(
+            select(DocumentSubmissionMeta)
+            .where(DocumentSubmissionMeta.application_id.in_(unresolved))
+            .order_by(DocumentSubmissionMeta.application_id, DocumentSubmissionMeta.created_at.desc())
+        ).all()
+        meta_seen = set()
+        for meta in metas:
+            if meta.application_id not in meta_seen:
+                result[meta.application_id] = meta.submission_kind or 'fresh'
+                meta_seen.add(meta.application_id)
     return result
+
+
+def college_revision_evidence_ids(db: Session, application_ids: list[str]) -> set[str]:
+    """Applications that have ever received a College revision submission/document.
+
+    This is stronger than relying on the current status because a revision can move from
+    `college_revised_submission_received` to `under_college_scientific_review` after re-assignment
+    while it must still stay in the Revised Submissions group rather than return to Fresh.
+    """
+    if not application_ids:
+        return set()
+    ids = set(db.scalars(
+        select(ApplicationSubmission.application_id).where(
+            ApplicationSubmission.application_id.in_(application_ids),
+            ApplicationSubmission.submission_kind == 'college_revision',
+        ).distinct()
+    ).all())
+    ids.update(db.scalars(
+        select(DocumentSubmissionMeta.application_id).where(
+            DocumentSubmissionMeta.application_id.in_(application_ids),
+            DocumentSubmissionMeta.submission_kind == 'college_revision',
+        ).distinct()
+    ).all())
+    return ids
 
 
 def latest_submission_map(db: Session, application_ids: list[str]):
@@ -496,6 +544,23 @@ def latest_revision_documents(db: Session, app_id: str, submission_kind: str = '
     ).all()
 
 
+def latest_fresh_documents(db: Session, app_id: str):
+    """Return the latest first-submission version for each document type."""
+    docs = db.scalars(
+        select(ApplicationDocument)
+        .join(DocumentSubmissionMeta, DocumentSubmissionMeta.document_id == ApplicationDocument.id)
+        .where(
+            ApplicationDocument.application_id == app_id,
+            DocumentSubmissionMeta.submission_kind == 'fresh',
+        )
+        .order_by(ApplicationDocument.document_type, ApplicationDocument.version.desc(), ApplicationDocument.uploaded_at.desc())
+    ).all()
+    latest = {}
+    for doc in docs:
+        latest.setdefault(doc.document_type, doc)
+    return list(latest.values())
+
+
 def selected_review_documents(db: Session, assignment_id: str):
     rows = db.scalars(
         select(ReviewAssignmentDocument)
@@ -748,10 +813,19 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
             .where(EthicsApplication.college_id == user.college_id, EthicsApplication.status != AppStatus.DRAFT.value)
             .order_by(EthicsApplication.updated_at.desc())
         ).unique().all()
-        kinds = latest_submission_kind_map(db, [a.id for a in apps])
+        app_ids = [a.id for a in apps]
+        kinds = latest_submission_kind_map(db, app_ids)
+        revision_ids = college_revision_evidence_ids(db, app_ids)
+
+        # Keep the College dashboard action-oriented. A revised submission is driven primarily by
+        # its workflow status and backed by revision evidence, never by the fragile latest-kind
+        # value alone. This guarantees a newly returned student revision appears immediately.
         pending_initial = [a for a in apps if a.status in {AppStatus.SUBMITTED.value, AppStatus.SECRETARIAT_SCREENING.value}]
-        fresh_apps = [a for a in apps if a not in pending_initial and kinds.get(a.id, 'fresh') == 'fresh']
-        revised_apps = [a for a in apps if kinds.get(a.id) == 'college_revision']
+        revised_apps = [a for a in apps if a.status == AppStatus.COLLEGE_REVISED.value]
+        fresh_apps = [a for a in apps if a.status in {AppStatus.FORWARDED_TO_COLLEGE.value, AppStatus.AWAITING_COLLEGE_REVIEWER.value} and a.id not in revision_ids]
+        active_review_apps = [a for a in apps if a.status == AppStatus.COLLEGE_REVIEW.value]
+        awaiting_decision_apps = [a for a in apps if a.status == AppStatus.AWAITING_COLLEGE_DECISION.value]
+
         pending_attention = db.scalars(select(SecretariatAttentionRequest).where(
             SecretariatAttentionRequest.college_id == user.college_id,
             SecretariatAttentionRequest.status == 'pending',
@@ -762,7 +836,9 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         return request.app.state.templates.TemplateResponse(
             request, 'dashboard_college.html',
             ctx(request, user, apps=apps, counts=counts, pending_initial=pending_initial, fresh_apps=fresh_apps,
-                revised_apps=revised_apps, attention_by_app=attention_by_app, submission_kinds=kinds,
+                revised_apps=revised_apps, active_review_apps=active_review_apps,
+                awaiting_decision_apps=awaiting_decision_apps, attention_by_app=attention_by_app,
+                submission_kinds=kinds, revision_ids=revision_ids,
                 previous_reviewers_by_app=previous_reviewers_by_app)
         )
 
@@ -1029,7 +1105,11 @@ def application_detail(request: Request, app_id: str, db: Session = Depends(get_
     fresh_documents = [d for d in documents if not stage_map.get(d.id) or stage_map[d.id].submission_kind == 'fresh']
     college_revision_documents = [d for d in documents if stage_map.get(d.id) and stage_map[d.id].submission_kind == 'college_revision']
     irb_revision_documents = [d for d in documents if stage_map.get(d.id) and stage_map[d.id].submission_kind == 'irb_revision']
-    screening_checks = document_check_map(db, app.id) if user.role in {Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value} else {}
+    screening_visible = user.role in {Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value} or (
+        user.id == app.applicant_id and app.status == AppStatus.RETURNED_ADMIN.value
+    )
+    screening_checks = document_check_map(db, app.id) if screening_visible else {}
+    screening_documents = latest_fresh_documents(db, app.id) if user.role in {Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value} else []
     required_rows = required_document_rows(app, documents) if can_docs else []
     attention_requests = db.scalars(
         select(SecretariatAttentionRequest)
@@ -1108,6 +1188,7 @@ def application_detail(request: Request, app_id: str, db: Session = Depends(get_
             irb_revision_documents=irb_revision_documents,
             document_stages=stage_map,
             screening_checks=screening_checks,
+            screening_documents=screening_documents,
             required_document_rows=required_rows,
             attention_requests=attention_requests,
             access_requests=access,
@@ -1276,11 +1357,9 @@ def submit_revision(request: Request, app_id: str, db: Session = Depends(get_db)
 
 
 @router.post('/secretariat/{app_id}/checklist')
-def save_secretariat_checklist(
+async def save_secretariat_checklist(
     request: Request,
     app_id: str,
-    checked_document_ids: list[str] = Form([]),
-    checklist_note: str = Form(''),
     db: Session = Depends(get_db),
 ):
     user = require_user(request, db)
@@ -1288,23 +1367,33 @@ def save_secretariat_checklist(
     app = get_app_or_404(db, app_id)
     if app.status not in {AppStatus.SUBMITTED.value, AppStatus.SECRETARIAT_SCREENING.value}:
         raise HTTPException(400, 'The Secretariat checklist is only available during initial screening.')
-    documents = db.scalars(select(ApplicationDocument).where(ApplicationDocument.application_id == app.id)).all()
+
+    form = await request.form()
+    documents = latest_fresh_documents(db, app.id)
     valid_ids = {d.id for d in documents}
-    checked = set(checked_document_ids) & valid_ids
+    checked = set(form.getlist('checked_document_ids')) & valid_ids
     existing = document_check_map(db, app.id)
     now = datetime.utcnow()
+    issue_count = 0
     for doc in documents:
         row = existing.get(doc.id)
         if not row:
             row = SecretariatDocumentCheck(application_id=app.id, document_id=doc.id)
             db.add(row)
         row.verified = doc.id in checked
-        row.note = checklist_note.strip() or None
+        note = str(form.get(f'document_note_{doc.id}', '')).strip()
+        row.note = note or None
+        if not row.verified and note:
+            issue_count += 1
         row.checked_by = user.id
         row.checked_at = now
+
     if app.status == AppStatus.SUBMITTED.value:
-        transition(db, app, AppStatus.SECRETARIAT_SCREENING.value, user.id, 'IRB Secretariat document checklist started')
-    audit(db, user.id, 'secretariat_document_checklist_saved', app.id, f'{len(checked)}/{len(documents)} documents verified')
+        transition(db, app, AppStatus.SECRETARIAT_SCREENING.value, user.id, 'IRB Secretariat document screening started')
+    audit(
+        db, user.id, 'secretariat_document_checklist_saved', app.id,
+        f'{len(checked)}/{len(documents)} latest fresh documents accepted; {issue_count} item(s) carry correction comments'
+    )
     db.commit()
     return RedirectResponse(f'/applications/{app.id}', status_code=303)
 
@@ -1324,15 +1413,16 @@ def secretariat_screen(
         raise HTTPException(400, 'Application is not awaiting Secretariat screening.')
 
     documents = db.scalars(select(ApplicationDocument).where(ApplicationDocument.application_id == app.id)).all()
+    screening_documents = latest_fresh_documents(db, app.id)
     if outcome == 'complete':
         required_rows = required_document_rows(app, documents)
         missing = [label for label, present in required_rows if not present]
         checks = document_check_map(db, app.id)
-        unchecked = [d for d in documents if not checks.get(d.id) or not checks[d.id].verified]
+        unchecked = [d for d in screening_documents if not checks.get(d.id) or not checks[d.id].verified]
         if missing:
             raise HTTPException(400, 'Cannot mark complete. Required item(s) missing: ' + ', '.join(missing))
         if unchecked:
-            raise HTTPException(400, 'Cannot mark complete until every submitted document is checked in the Secretariat checklist.')
+            raise HTTPException(400, 'Cannot mark complete until every latest first-submission document is marked suitable in the Secretariat checklist.')
 
         transition(db, app, AppStatus.ADMIN_COMPLETE.value, user.id, note or 'Administrative screening complete')
         resolve_attention_requests(db, app.id, user.id, 'Secretariat screening completed')
@@ -1346,9 +1436,29 @@ def secretariat_screen(
         else:
             transition(db, app, AppStatus.DIRECT_IRB.value, user.id, 'Affiliation has no College Scientific Committee. Application retained by the IRB Secretariat for direct IRB review classification')
     elif outcome == 'return':
-        app.secretariat_note = note
+        checks = document_check_map(db, app.id)
+        issue_rows = [
+            (d, checks.get(d.id)) for d in screening_documents
+            if checks.get(d.id) and (not checks[d.id].verified) and (checks[d.id].note or '').strip()
+        ]
+        if not note.strip() and not issue_rows:
+            raise HTTPException(400, 'Add an overall return note or a correction comment against at least one document before returning the application.')
+        app.secretariat_note = note.strip() or 'Please address the document-specific Secretariat comments and resubmit.'
         resolve_attention_requests(db, app.id, user.id, 'Application returned to applicant for administrative correction')
-        transition(db, app, AppStatus.RETURNED_ADMIN.value, user.id, note or 'Returned for administrative correction')
+        transition(db, app, AppStatus.RETURNED_ADMIN.value, user.id, 'Returned to applicant following first-submission document screening')
+        if gmail_configured():
+            try:
+                secretariat_return_email(
+                    applicant_name=app.applicant.full_name,
+                    applicant_email=app.applicant.email,
+                    reference_no=app.reference_no or '',
+                    research_title=app.title,
+                    overall_note=app.secretariat_note or '',
+                    document_comments=[(d.document_type, chk.note or '') for d, chk in issue_rows],
+                    application_url=f'{_base_url(request)}/applications/{app.id}',
+                )
+            except Exception as exc:
+                audit(db, user.id, 'secretariat_return_email_failed', app.id, str(exc)[:500])
     else:
         raise HTTPException(400, 'Unknown screening outcome')
     db.commit()
@@ -2151,6 +2261,108 @@ def decide_post_approval_request(
     return RedirectResponse(f'/applications/{app.id}', status_code=303)
 
 
+@router.get('/documents/{document_id}/view', response_class=HTMLResponse)
+def view_document(request: Request, document_id: str, db: Session = Depends(get_db)):
+    user = require_user(request, db)
+    doc = db.get(ApplicationDocument, document_id)
+    if not doc:
+        raise HTTPException(404)
+    app = get_app_or_404(db, doc.application_id)
+    if not can_view_documents(db, user, app):
+        raise HTTPException(403)
+    return request.app.state.templates.TemplateResponse(
+        request, 'document_viewer.html', ctx(request, user, app=app, document=doc)
+    )
+
+
+def _preview_html(title: str, body: str) -> str:
+    safe_title = html_escape(title)
+    return ('<!doctype html><html><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<style>body{font-family:Arial,sans-serif;margin:0;padding:24px;color:#1d2533;background:#fff}'
+            'h2,h3{color:#20285d}p{line-height:1.55}table{border-collapse:collapse;width:100%;margin:14px 0}'
+            'td,th{border:1px solid #dfe4ee;padding:7px;vertical-align:top;font-size:13px}'
+            '.title{position:sticky;top:0;background:#fff;padding:8px 0 12px;border-bottom:1px solid #e5e7eb;margin-bottom:18px}'
+            '</style></head><body><div class="title"><strong>' + safe_title + '</strong></div>' + body + '</body></html>')
+
+
+def _preview_fallback_html(doc: ApplicationDocument, message: str) -> str:
+    body = ('<div style="padding:18px;border:1px solid #ead58c;background:#fff8dd;border-radius:8px">'
+            '<strong>' + html_escape(message) + '</strong>'
+            '<p>Use the Download Original button to open the file locally.</p></div>')
+    return _preview_html(doc.original_name, body)
+
+
+@router.get('/documents/{document_id}/inline')
+def inline_document(request: Request, document_id: str, db: Session = Depends(get_db)):
+    user = require_user(request, db)
+    doc = db.get(ApplicationDocument, document_id)
+    if not doc:
+        raise HTTPException(404)
+    app = get_app_or_404(db, doc.application_id)
+    if not can_view_documents(db, user, app):
+        raise HTTPException(403)
+    path = storage_path(app.id, doc.stored_name)
+    if not path.exists():
+        raise HTTPException(404, 'Stored file missing')
+
+    ext = path.suffix.lower()
+    audit(db, user.id, 'document_previewed', app.id, doc.original_name)
+    db.commit()
+
+    if ext == '.pdf':
+        return FileResponse(path, media_type='application/pdf', headers={'Content-Disposition': 'inline'})
+
+    if ext == '.docx':
+        try:
+            from docx import Document as DocxDocument
+            source = DocxDocument(path)
+            chunks = []
+            for para in source.paragraphs:
+                text = html_escape(para.text)
+                if text.strip():
+                    chunks.append('<p>' + text + '</p>')
+            for table in source.tables:
+                rows = []
+                for row in table.rows:
+                    cells = ''.join('<td>' + html_escape(cell.text) + '</td>' for cell in row.cells)
+                    rows.append('<tr>' + cells + '</tr>')
+                chunks.append('<table>' + ''.join(rows) + '</table>')
+            return HTMLResponse(_preview_html(doc.original_name, ''.join(chunks) or '<p>No readable text was found in this DOCX file.</p>'))
+        except Exception:
+            return HTMLResponse(_preview_fallback_html(doc, 'DOCX preview could not be generated.'))
+
+    if ext == '.xlsx':
+        try:
+            from openpyxl import load_workbook
+            wb = load_workbook(path, read_only=True, data_only=True)
+            parts = []
+            for ws in wb.worksheets[:5]:
+                parts.append('<h3>' + html_escape(ws.title) + '</h3><table>')
+                for row in ws.iter_rows(values_only=True):
+                    parts.append('<tr>' + ''.join('<td>' + html_escape('' if v is None else str(v)) + '</td>' for v in row) + '</tr>')
+                parts.append('</table>')
+            return HTMLResponse(_preview_html(doc.original_name, ''.join(parts)))
+        except Exception:
+            return HTMLResponse(_preview_fallback_html(doc, 'Spreadsheet preview could not be generated.'))
+
+    if ext == '.xls':
+        try:
+            import xlrd
+            wb = xlrd.open_workbook(path)
+            parts = []
+            for ws in wb.sheets()[:5]:
+                parts.append('<h3>' + html_escape(ws.name) + '</h3><table>')
+                for r in range(ws.nrows):
+                    parts.append('<tr>' + ''.join('<td>' + html_escape(str(ws.cell_value(r, c))) + '</td>' for c in range(ws.ncols)) + '</tr>')
+                parts.append('</table>')
+            return HTMLResponse(_preview_html(doc.original_name, ''.join(parts)))
+        except Exception:
+            return HTMLResponse(_preview_fallback_html(doc, 'Spreadsheet preview could not be generated.'))
+
+    return HTMLResponse(_preview_fallback_html(doc, 'Secure inline preview is not available for this legacy file format.'))
+
+
 @router.get('/documents/{document_id}/download')
 def download_document(request: Request, document_id: str, db: Session = Depends(get_db)):
     user = require_user(request, db)
@@ -2242,9 +2454,23 @@ def _review_queue_data(db: Session, user: User, level: str):
 
 def _render_review_queue(request: Request, db: Session, user: User, level: str):
     apps, reviewers, batches, counts, workloads, batch_stats = _review_queue_data(db, user, level)
-    kinds = latest_submission_kind_map(db, [a.id for a in apps])
-    fresh_apps = [a for a in apps if kinds.get(a.id, 'fresh') == 'fresh']
-    revised_apps = [a for a in apps if kinds.get(a.id) in {'college_revision', 'irb_revision'}]
+    app_ids = [a.id for a in apps]
+    kinds = latest_submission_kind_map(db, app_ids)
+    previous_reviewers_by_app = {}
+
+    if level == 'college':
+        revision_ids = college_revision_evidence_ids(db, app_ids)
+        # Current status is authoritative for a just-returned revision. Historical revision evidence
+        # keeps an application in the revised group when it is subsequently assigned for re-review.
+        revised_apps = [a for a in apps if a.status == AppStatus.COLLEGE_REVISED.value or a.id in revision_ids]
+        revised_ids = {a.id for a in revised_apps}
+        fresh_apps = [a for a in apps if a.id not in revised_ids]
+        previous_reviewers_by_app = {a.id: previous_college_reviewers(db, a.id) for a in revised_apps}
+    else:
+        revised_apps = [a for a in apps if a.status == AppStatus.IRB_REVISED.value or kinds.get(a.id) == 'irb_revision']
+        revised_ids = {a.id for a in revised_apps}
+        fresh_apps = [a for a in apps if a.id not in revised_ids]
+
     batch_contacts = reviewer_contact_map_for_batches(db, batches)
     saved_contacts = []
     if level == 'college':
@@ -2262,6 +2488,7 @@ def _render_review_queue(request: Request, db: Session, user: User, level: str):
             fresh_apps=fresh_apps,
             revised_apps=revised_apps,
             submission_kinds=kinds,
+            previous_reviewers_by_app=previous_reviewers_by_app,
             reviewers=reviewers,
             saved_contacts=saved_contacts,
             batches=batches,
