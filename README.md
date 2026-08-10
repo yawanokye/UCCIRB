@@ -232,3 +232,14 @@ This release strengthens the College Scientific Committee and applicant workflow
 - Re-review sends only the latest College revision round to the selected previous reviewer(s), with those revised files attached to the email where size permits and available in the secure workspace.
 
 No additional Render environment variable is required for V12. Gmail attachment delivery uses the existing `GMAIL_*` settings.
+
+
+## V14 revision-queue and College dashboard fix
+
+- Revised submissions are now classified from the current College revision status plus persisted revision evidence.
+- Legacy/migrated revisions can also be inferred from document-stage metadata, so they cannot silently fall back into Fresh Submissions.
+- The College dashboard is action-oriented: IRB watch, fresh awaiting assignment, revised awaiting action, active reviews, and Committee decisions are separated.
+- Revised rows show previous-round reviewers and link directly to the re-review/administrative-review decision.
+- The review assignment queue lists revised submissions separately and supports assignment to a new reviewer while preserving the shortcut to previous reviewers.
+- Initial Secretariat screening retains the secure in-frame document viewer, per-document checklist/comments, and return-to-applicant workflow.
+- Security hardening from V13 remains enabled.
