@@ -463,3 +463,16 @@ class ReviewerContact(Base):
 
     proxy_user = relationship("User", foreign_keys=[proxy_user_id])
     college = relationship("College")
+
+
+class SecurityEvent(Base):
+    """Security-relevant events. IP/email are HMAC-hashed to reduce sensitive log data."""
+    __tablename__ = "security_events"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uuid4_str)
+    event_type: Mapped[str] = mapped_column(String(80), index=True)
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    subject_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    ip_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    user_agent_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)

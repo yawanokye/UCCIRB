@@ -32,3 +32,17 @@ GMAIL_REFRESH_TOKEN = os.getenv('GMAIL_REFRESH_TOKEN', '').strip()
 GMAIL_SENDER_EMAIL = os.getenv('GMAIL_SENDER_EMAIL', '').strip()
 REVIEW_ASSIGNMENT_LINK_EXPIRY_DAYS = int(os.getenv('REVIEW_ASSIGNMENT_LINK_EXPIRY_DAYS', '30'))
 MAX_REVIEWERS_PER_APPLICATION = int(os.getenv('MAX_REVIEWERS_PER_APPLICATION', '3'))
+
+# Security hardening
+SESSION_MAX_AGE_SECONDS = int(os.getenv("SESSION_MAX_AGE_SECONDS", "28800"))
+SESSION_IDLE_MINUTES = int(os.getenv("SESSION_IDLE_MINUTES", "30"))
+LOGIN_MAX_FAILURES = int(os.getenv("LOGIN_MAX_FAILURES", "5"))
+LOGIN_LOCKOUT_MINUTES = int(os.getenv("LOGIN_LOCKOUT_MINUTES", "15"))
+RATE_LIMIT_POSTS_PER_MINUTE = int(os.getenv("RATE_LIMIT_POSTS_PER_MINUTE", "120"))
+RATE_LIMIT_SECURE_REVIEW_PER_MINUTE = int(os.getenv("RATE_LIMIT_SECURE_REVIEW_PER_MINUTE", "60"))
+ENABLE_API_DOCS = os.getenv("ENABLE_API_DOCS", "false").lower() == "true"
+ALLOWED_HOSTS = [h.strip() for h in os.getenv("ALLOWED_HOSTS", "*.onrender.com,localhost,127.0.0.1,testserver").split(",") if h.strip()]
+SUPERADMIN_ALLOWED_IPS = {ip.strip() for ip in os.getenv("SUPERADMIN_ALLOWED_IPS", "").split(",") if ip.strip()}
+ALLOW_LEGACY_OFFICE = os.getenv("ALLOW_LEGACY_OFFICE", "false").lower() == "true"
+if not ALLOW_LEGACY_OFFICE:
+    ALLOWED_EXTENSIONS = {".pdf", ".docx", ".xlsx"}
