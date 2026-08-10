@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Secure Review Workspace · UCC Ethics Portal</title><link rel="icon" type="image/png" href="/static/img/ucc-brand.png"><link rel="stylesheet" href="/static/app.css"></head>
+<body>
+<header class="ucc-header"><div class="ucc-header-inner"><a class="ucc-brand-link" href="#"><img src="/static/img/ucc-brand.png" class="ucc-brand-image" alt="University of Cape Coast"></a><div class="secure-badge">Secure Reviewer Workspace</div></div><div class="ucc-gold-line"></div></header>
+<main class="container secure-workspace">
+{% if error %}<div class="authcard"><span class="eyebrow">Secure review assignment</span><h1>Link unavailable</h1><div class="alert danger">{{ error }}</div><p class="hint">Contact the UCC IRB Secretariat or the assigning College Scientific Committee.</p></div>{% else %}
+<div class="pagehead"><div><span class="eyebrow">{{ batch.reference }}</span><h1>{{ 'College Scientific Review' if batch.level == 'college' else 'IRB Ethical Review' }} Workspace</h1><p>Reviewer: <strong>{{ batch.reviewer.full_name }}</strong>. This workspace contains {{ items|length }} assigned application{{ '' if items|length == 1 else 's' }}. Submit each review separately.</p></div><div class="secure-deadline"><small>Review due</small><strong>{{ batch.due_at.strftime('%d %b %Y') }}</strong></div></div>
+<div class="alert warning"><strong>Confidentiality:</strong> This link is personal to the assigned reviewer. Do not forward it. Application documents remain unavailable until you declare no conflict of interest for the individual application.</div>
+<div class="progress-strip"><strong>{{ items|selectattr('assignment.status','equalto','completed')|list|length }}/{{ items|length }} reports submitted</strong><span>Secure link expires {{ batch.link_expires_at.strftime('%d %b %Y') }}</span></div>
+
+{% for item in items %}{% set a=item.assignment %}{% set app=a.application %}{% set declaration=declarations.get(a.id) %}
+<section class="card secure-work-item {% if a.status == 'completed' %}work-complete{% endif %}">
+  <div class="work-head"><div><span class="work-no">Application {{ item.work_no }}</span><h2>{{ app.reference_no }} · {{ app.title }}</h2><p>{{ app.applicant.full_name }} · {% if app.college.code == 'IRB-DIRECT' %}{{ app.department or 'Other UCC Unit' }}{% else %}{{ app.college.name }}{% endif %}</p></div><span class="status">{{ a.status.title() }}</span></div>
+  {% if a.status == 'completed' %}
+    <div class="alert success"><strong>Review submitted.</strong> {% if a.completed_at %}Received {{ a.completed_at.strftime('%d %b %Y %H:%M') }} UTC.{% endif %}</div>
+    <p><strong>Recommendation:</strong> {{ a.recommendation.replace('_',' ').title() if a.recommendation else '—' }}</p>
+    {% for rf in reports.get(a.id,[]) %}<span class="file-pill">{{ rf.document_kind.replace('_',' ').title() }} · {{ rf.original_name }}</span>{% endfor %}
+  {% elif a.status in ['declined','revoked'] %}
+    <div class="alert danger">This review item is {{ a.status }} and no further action is available.</div>
+  {% elif not declaration %}
+    <h3>Step 1. Conflict-of-interest declaration</h3><p>Declare your position before any research documents are released.</p>
+    <form method="post" action="/secure/reviews/{{ token }}/items/{{ a.id }}/declaration">
+      <div class="formgrid"><label>Declaration<select name="declaration" required><option value="">Select</option><option value="clear">I have no conflict of interest and can review this application</option><option value="conflict">I have a potential conflict of interest and must decline</option></select></label><label>Note <span class="optional">optional unless explaining a conflict</span><textarea name="note" rows="3"></textarea></label></div><button class="btn" type="submit">Record Declaration</button>
+    </form>
+  {% elif declaration.declaration == 'clear' %}
+    <div class="declaration-ok">No conflict declared on {{ declaration.declared_at.strftime('%d %b %Y %H:%M') }} UTC.</div>
+    <div class="secure-steps"><div><h3>Step 2. Download application package</h3><p>The ZIP contains the latest version of each submitted application document and a server-generated application summary.</p><a class="btn secondary" href="/secure/reviews/{{ token }}/items/{{ a.id }}/package">Download Application Package</a></div><div><h3>Step 3. Submit this review</h3><p>Applicant details are already linked to this assignment. Do not re-enter or change them.</p></div></div>
+    <form method="post" action="/secure/reviews/{{ token }}/items/{{ a.id }}/submit" enctype="multipart/form-data" class="secure-report-form">
+      <div class="formgrid"><label>Recommendation<select name="recommendation" required><option value="">Select recommendation</option>{% if a.level == 'college' %}<option value="scientifically_recommended">Scientifically Recommended</option><option value="minor_revision">Minor Revision Required</option><option value="major_revision">Major Revision Required</option><option value="specialist_review">Specialist Review Required</option><option value="not_recommended">Not Scientifically Recommended</option>{% else %}<option value="approve">Recommend Approval</option><option value="approve_conditions">Recommend Approval with Conditions</option><option value="minor_revision">Minor Revision Required</option><option value="major_revision">Major Revision Required</option><option value="full_board">Refer to Full Board</option><option value="reject">Recommend Rejection</option>{% endif %}</select></label><label class="wide">Review comments<textarea name="comments" rows="7" required placeholder="Provide clear, numbered and actionable comments."></textarea></label><label>Completed/Signed Review Report <span class="urgent">required</span><input type="file" name="report_file" accept=".pdf,.doc,.docx" required></label><label>Annotated Protocol <span class="optional">optional</span><input type="file" name="annotated_protocol" accept=".pdf,.doc,.docx"></label><label>Additional Supporting File <span class="optional">optional</span><input type="file" name="supporting_file" accept=".pdf,.doc,.docx,.xls,.xlsx"></label></div><button class="btn" type="submit">Submit Review for {{ app.reference_no }}</button>
+    </form>
+  {% endif %}
+</section>
+{% endfor %}
+{% endif %}
+</main><footer><strong>University of Cape Coast</strong><br>Institutional Review Board · Secure Research Ethics Review</footer></body></html>

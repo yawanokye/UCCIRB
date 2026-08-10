@@ -44,14 +44,24 @@
 <section class="card actioncard">
   <h2>{% if app.status in ['college_revision_required','irb_revision_required'] %}Upload revised documents{% else %}Upload supporting documents{% endif %}</h2>
   {% if app.status == 'returned_to_applicant_admin' and app.secretariat_note %}<div class="alert warning"><strong>Secretariat request:</strong> {{ app.secretariat_note }}</div>{% endif %}
+  <div class="upload-resource-note"><span>Need a form?</span><a href="/applicant-guide#resources">Open UCC-IRB Forms & Templates</a><a href="/applicant-guide#required-documents">View Required Documents</a></div>
   <form method="post" action="/applications/{{ app.id }}/documents" enctype="multipart/form-data" class="inlineform">
     <select name="document_type" required>
       <option>Research Protocol</option>
+      <option>Completed UCC-IRB Composite Form</option>
+      <option>Application Letter</option>
       <option>Data Collection Instrument</option>
       <option>Supervisor Approval</option>
+      <option>Head of Unit Support Letter</option>
+      <option>Collaborator Support Letter</option>
       <option>Participant Information Sheet</option>
       <option>Consent Form</option>
       <option>Assent Form</option>
+      <option>Consent from Records Keeper</option>
+      <option>Completed IRB Checklist</option>
+      <option>Similarity Report</option>
+      <option>Applicant Abridged CV</option>
+      <option>Supervisor Abridged CV</option>
       <option>Recruitment Material</option>
       <option>Data Management Plan</option>
       <option>Response to College Review</option>
@@ -65,7 +75,7 @@
   {% if app.status in ['draft','returned_to_applicant_admin'] %}
     <form method="post" action="/applications/{{ app.id }}/submit" class="submitbox">
       <button class="btn" type="submit">Submit to IRB Secretariat</button>
-      <small>Student applications require Research Protocol, Data Collection Instrument and Supervisor Approval.</small>
+      <small>Before submitting, check the <a href="/applicant-guide#required-documents">official document checklist</a>. The portal validates the core application package. Consent, assent, records access and study instruments are required when applicable to the study.</small>
     </form>
   {% else %}
     <form method="post" action="/applications/{{ app.id }}/submit-revision" class="submitbox">
@@ -128,17 +138,9 @@
 
 {% if user.role == 'college_admin' and app.status in ['awaiting_college_reviewer_assignment','under_college_scientific_review','college_revised_submission_received'] %}
 <section class="card actioncard">
-  <h2>Assign College scientific reviewer</h2>
-  {% if college_reviewers %}
-  <form method="post" action="/college/{{ app.id }}/assign-reviewer" class="inlineform four">
-    <select name="reviewer_id" required>
-      {% for r in college_reviewers %}<option value="{{ r.id }}">{{ r.full_name }} · {{ reviewer_workload[r.id].active }} active / {{ reviewer_workload[r.id].completed }} completed{% if reviewer_workload[r.id].overdue %} / {{ reviewer_workload[r.id].overdue }} overdue{% endif %}</option>{% endfor %}
-    </select>
-    <select name="assignment_type"><option value="primary">Primary</option><option value="secondary">Secondary</option><option value="specialist">Specialist</option></select>
-    <input type="number" min="1" max="90" name="due_days" value="{{ default_due_days }}" aria-label="Review due days">
-    <button class="btn" type="submit">Assign Reviewer</button>
-  </form>
-  {% else %}<div class="alert warning">No active College scientific reviewer account is assigned to this College.</div>{% endif %}
+  <h2>College scientific reviewer assignment</h2>
+  <p>Reviewer assignments are now managed from the College receiving queue. You can select this application together with other ready applications and send one secure assignment workspace to the reviewer.</p>
+  <a class="btn" href="/college/review-queue">Open College Review Assignment Queue</a>
 </section>
 {% endif %}
 
@@ -159,7 +161,7 @@
     <section class="card actioncard navyline">
       <h2>{% if x.level == 'college' %}Submit scientific review{% else %}Submit IRB ethical review{% endif %}</h2>
       {% if assignment_meta.get(x.id) and assignment_meta[x.id].due_at %}<p class="hint">Review due: <strong>{{ assignment_meta[x.id].due_at.strftime('%d %b %Y %H:%M') }}</strong>{% if assignment_meta[x.id].due_at < now %} <span class="overdue">Overdue</span>{% endif %}</p>{% endif %}
-      <form method="post" action="/review/{{ x.id }}/submit">
+      <form method="post" action="/review/{{ x.id }}/submit" enctype="multipart/form-data">
         <label>Recommendation
           <select name="recommendation" required>
             {% if x.level == 'college' %}
@@ -179,7 +181,12 @@
           </select>
         </label>
         <label>Review comments<textarea name="comments" rows="8" required placeholder="Provide clear, numbered and actionable comments."></textarea></label>
-        <button class="btn" type="submit">Submit Review</button>
+        <div class="formgrid">
+          <label>Signed/Completed Review Report <span class="urgent">required</span><input type="file" name="report_file" required accept=".pdf,.doc,.docx"></label>
+          <label>Annotated Protocol <span class="optional">optional</span><input type="file" name="annotated_protocol" accept=".pdf,.doc,.docx"></label>
+          <label>Additional Supporting File <span class="optional">optional</span><input type="file" name="supporting_file" accept=".pdf,.doc,.docx,.xls,.xlsx"></label>
+        </div>
+        <button class="btn" type="submit">Submit Review Report</button>
       </form>
     </section>
     {% endif %}
@@ -195,6 +202,11 @@
     <div class="review-meta"><span>{{ x.reviewer.full_name }}</span><span>Assigned {{ x.assigned_at.strftime('%d %b %Y') }}</span><span class="chip">{{ x.status.title() }}</span>{% if assignment_meta.get(x.id) and assignment_meta[x.id].due_at %}<span>Due {{ assignment_meta[x.id].due_at.strftime('%d %b %Y') }}</span>{% endif %}</div>
     {% if x.recommendation %}<p><strong>Recommendation:</strong> {{ x.recommendation.replace('_',' ').title() }}</p>{% endif %}
     {% if x.comments %}<div class="review-comments">{{ x.comments }}</div>{% endif %}
+    {% if report_documents.get(x.id) %}
+      <div class="review-files"><strong>Submitted review files:</strong>
+      {% for rf in report_documents[x.id] %}<a href="/review-reports/{{ rf.id }}/download">{{ rf.document_kind.replace('_',' ').title() }} · {{ rf.original_name }}</a>{% endfor %}
+      </div>
+    {% endif %}
     {% if declarations.get(x.id) and declarations[x.id].declaration == 'conflict' %}<div class="alert danger">Reviewer declared a conflict of interest and declined this assignment.</div>{% endif %}
   </div>
   {% endfor %}
@@ -243,15 +255,9 @@
 
 {% if user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status in ['awaiting_irb_reviewer_assignment','under_irb_ethical_review','irb_revised_submission_received'] %}
 <section class="card actioncard navyline">
-  <h2>Assign IRB ethical reviewer</h2>
-  {% if irb_reviewers %}
-  <form method="post" action="/irb/{{ app.id }}/assign-reviewer" class="inlineform four">
-    <select name="reviewer_id" required>{% for r in irb_reviewers %}<option value="{{ r.id }}">{{ r.full_name }} · {{ reviewer_workload[r.id].active }} active / {{ reviewer_workload[r.id].completed }} completed{% if reviewer_workload[r.id].overdue %} / {{ reviewer_workload[r.id].overdue }} overdue{% endif %}</option>{% endfor %}</select>
-    <select name="assignment_type"><option value="primary">Primary</option><option value="secondary">Secondary</option><option value="specialist">Specialist</option></select>
-    <input type="number" name="due_days" min="1" max="90" value="{{ default_due_days }}" aria-label="Review due days">
-    <button class="btn" type="submit">Assign IRB Reviewer</button>
-  </form>
-  {% else %}<div class="alert warning">No active IRB Reviewer account has been created. Ask the System Administrator to create one.</div>{% endif %}
+  <h2>IRB ethical reviewer assignment</h2>
+  <p>Use the central IRB review queue to select one or several ready applications and assign them to a reviewer under one secure link.</p>
+  <a class="btn" href="/irb/review-queue">Open IRB Review Assignment Queue</a>
 </section>
 {% endif %}
 

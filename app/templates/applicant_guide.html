@@ -1,0 +1,99 @@
+{% extends 'base.html' %}
+{% block title %}Applicant Guide & Resources · UCC Ethics Portal{% endblock %}
+{% block content %}
+<div class="guide-head">
+  <div>
+    <span class="eyebrow">Applicant guide</span>
+    <h1>How to apply for ethical clearance</h1>
+    <p>Prepare your application package before you start. The online portal is the central submission point to the UCC Institutional Review Board Secretariat.</p>
+  </div>
+  <div class="guide-head-actions">
+    <a class="btn" href="/register">Start New Application</a>
+    <a class="btn secondary" href="/login?portal=applicant">Applicant Login</a>
+  </div>
+</div>
+
+<nav class="guide-jump" aria-label="Applicant guide sections">
+  <a href="#how-to-apply">How to Apply</a>
+  <a href="#required-documents">Required Documents</a>
+  <a href="#important">Important Information</a>
+  <a href="#fees">Application Fees</a>
+  <a href="#resources">Forms & Templates</a>
+  <a href="#routing">Review Pathway</a>
+</nav>
+
+<section class="guide-section" id="how-to-apply">
+  <div class="section-title"><span class="guide-number">1</span><div><span class="eyebrow">Application process</span><h2>How to apply online</h2></div></div>
+  <div class="apply-steps">
+    <div><b>1</b><h3>Read the instructions</h3><p>Review the UCC-IRB application instructions and download the relevant forms before creating your application.</p></div>
+    <div><b>2</b><h3>Create an applicant account</h3><p>Applicants create their own account. Use an email address you can access throughout the review process.</p></div>
+    <div><b>3</b><h3>Create the application</h3><p>Enter the research title, applicant type, institutional affiliation, programme and study summary.</p></div>
+    <div><b>4</b><h3>Upload the application package</h3><p>Upload the protocol and all documents applicable to your study. Use the document checklist below.</p></div>
+    <div><b>5</b><h3>Submit to the IRB Secretariat</h3><p>All applications enter the IRB Secretariat first. Submitted records become locked until the Secretariat requests a correction or a review stage requires revision.</p></div>
+    <div><b>6</b><h3>Respond and track</h3><p>Monitor your dashboard, respond to review comments and upload revised versions when requested.</p></div>
+  </div>
+</section>
+
+<section class="guide-section" id="required-documents">
+  <div class="section-title"><span class="guide-number">2</span><div><span class="eyebrow">Application package</span><h2>Documents required to apply</h2></div></div>
+  <div class="document-checklist">
+    <div class="check-item required"><span>Required</span><strong>Application letter for ethical clearance by the Principal Investigator</strong><p>Upload a signed application letter addressed for ethical clearance.</p></div>
+    <div class="check-item required"><span>Required</span><strong>Research protocol / completed UCC-IRB Composite Form</strong><p>Prepare the proposal in the UCC-IRB format and ensure all applicable sections are completed.</p></div>
+    <div class="check-item student"><span>Students</span><strong>Supervisor and institutional support letter(s)</strong><p>Student applicants should provide the required supervisor and Head of College/School/Faculty/Department support documentation.</p></div>
+    <div class="check-item conditional"><span>As applicable</span><strong>Consent form(s), assent form and checklist</strong><p>Use the adult consent, child assent or records-keeper form according to the study population and source of data.</p></div>
+    <div class="check-item conditional"><span>As applicable</span><strong>Data collection instrument(s)</strong><p>Attach questionnaires, interview guides, observation schedules or other study instruments where used.</p></div>
+    <div class="check-item required"><span>Required</span><strong>Similarity report</strong><p>The UCC-IRB instructions state that protocols are subject to a similarity threshold of not more than 15%.</p></div>
+    <div class="check-item required"><span>Required</span><strong>Abridged Curriculum Vitae</strong><p>Use the UCC-IRB CV template. Student investigators should also include the supervisor's abridged CV where required.</p></div>
+    <div class="check-item conditional"><span>Non-students</span><strong>Collaborator support letter(s)</strong><p>Where collaborators are from a different institution, include the relevant support documentation.</p></div>
+  </div>
+  <div class="guide-callout"><strong>Tip:</strong> Download the official resources below before preparing your final upload package.</div>
+</section>
+
+<section class="guide-section" id="important">
+  <div class="section-title"><span class="guide-number">3</span><div><span class="eyebrow">Before submission</span><h2>Important information</h2></div></div>
+  <div class="important-grid">
+    <div><strong>Complete every applicable section</strong><p>Incomplete applications may be returned during Secretariat administrative screening.</p></div>
+    <div><strong>Do not begin primary data collection first</strong><p>The UCC-IRB instructions state that investigators who have already started or gathered primary data are not eligible to apply for ethical clearance.</p></div>
+    <div><strong>Use clear document formatting</strong><p>The current UCC-IRB instructions specify A4 paper and clear fonts such as Times New Roman, Arial or Calibri.</p></div>
+    <div><strong>Respond to review comments promptly</strong><p>The uploaded instructions state that applications may be withdrawn if review comments are not addressed within one month.</p></div>
+  </div>
+</section>
+
+<section class="guide-section" id="fees">
+  <div class="section-title"><span class="guide-number">4</span><div><span class="eyebrow">Fee information</span><h2>Ethical clearance application fees</h2></div></div>
+  <div class="fee-card">
+    <div>
+      <h3>Check the approved fee schedule for your applicant category</h3>
+      <p>The portal provides the uploaded University Council approval letter containing the UCC-IRB application fee categories and approved fees.</p>
+      <p class="source-note">Applicants should use the fee schedule currently authorised by the IRB Secretariat if a newer institutional schedule is issued.</p>
+    </div>
+    <a class="btn gold" target="_blank" rel="noopener" href="/static/resources/ethical-clearance-application-fees.pdf">View Application Fee Schedule</a>
+  </div>
+</section>
+
+<section class="guide-section" id="resources">
+  <div class="section-title"><span class="guide-number">5</span><div><span class="eyebrow">Official resources</span><h2>Forms and templates</h2></div></div>
+  <div class="resource-grid">
+    <a class="resource-card primary-resource" target="_blank" rel="noopener" href="/static/resources/composite-application-form.pdf"><span>Application</span><strong>Composite Form</strong><small>UCC-IRB application form, protocol format, consent materials and checklist.</small><em>Open PDF</em></a>
+    <a class="resource-card" target="_blank" rel="noopener" href="/static/resources/application-instructions.pdf"><span>Guide</span><strong>Application Instructions</strong><small>Submission instructions, document requirements and important information.</small><em>Open PDF</em></a>
+    <a class="resource-card" target="_blank" rel="noopener" href="/static/resources/adult-informed-consent-form.pdf"><span>Consent</span><strong>Adult Informed Consent Form</strong><small>Template for participants aged 18 years and above.</small><em>Open PDF</em></a>
+    <a class="resource-card" target="_blank" rel="noopener" href="/static/resources/child-assent-form.pdf"><span>Assent</span><strong>Child Assent Form</strong><small>Use where minors are involved in the study.</small><em>Open PDF</em></a>
+    <a class="resource-card" target="_blank" rel="noopener" href="/static/resources/consent-records-keepers.pdf"><span>Records</span><strong>Consent from Records Keepers</strong><small>For studies seeking access to institutional or other records.</small><em>Open PDF</em></a>
+    <a class="resource-card" target="_blank" rel="noopener" href="/static/resources/abridged-cv-template.pdf"><span>CV</span><strong>Abridged CV Template</strong><small>Official UCC-IRB format for the applicant and, where required, supervisor.</small><em>Open PDF</em></a>
+    <a class="resource-card" target="_blank" rel="noopener" href="/static/resources/ethical-clearance-application-fees.pdf"><span>Fees</span><strong>Application Fee Schedule</strong><small>University Council approval letter for ethical clearance application fees.</small><em>Open PDF</em></a>
+  </div>
+</section>
+
+<section class="guide-section" id="routing">
+  <div class="section-title"><span class="guide-number">6</span><div><span class="eyebrow">Institutional routing</span><h2>What happens after submission?</h2></div></div>
+  <div class="routing-simple-grid">
+    <div class="routing-simple college"><h3>Five Colleges with Scientific Committees</h3><ul><li>College of Agriculture and Natural Sciences</li><li>College of Distance Education</li><li>College of Education Studies</li><li>College of Humanities and Legal Studies</li><li>College of Health and Allied Sciences</li></ul><p><strong>Route:</strong> IRB Secretariat → authorised College Scientific Review → IRB Secretariat → IRB ethical review.</p></div>
+    <div class="routing-simple direct"><h3>Other UCC academic and administrative units</h3><p>Applications from units outside the five Colleges are retained by the IRB Secretariat after administrative screening and move directly to IRB review classification.</p><p><strong>Route:</strong> IRB Secretariat → IRB classification → ethical review → decision.</p></div>
+  </div>
+</section>
+
+<section class="guide-final-cta">
+  <div><span class="eyebrow">Ready to submit?</span><h2>Start your ethical clearance application</h2><p>Create your own applicant account or sign in to continue an existing application.</p></div>
+  <div class="actions"><a class="btn" href="/register">Start New Application</a><a class="btn secondary" href="/login?portal=applicant">Applicant Login</a></div>
+</section>
+{% endblock %}

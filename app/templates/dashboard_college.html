@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}College Scientific Committee · UCC Ethics Portal{% endblock %}
 {% block content %}
-<div class="pagehead"><div><span class="eyebrow">College Scientific Committee</span><h1>{{ user.college.name }}</h1><p>Applications become visible after Secretariat screening. Research documents remain locked until the Secretariat grants review authority.</p></div></div>
+<div class="pagehead"><div><span class="eyebrow">College Scientific Committee</span><h1>{{ user.college.name }}</h1><p>Applications become visible after Secretariat screening. Research documents remain locked until the Secretariat grants review authority.</p></div><a class="btn" href="/college/review-queue">Reviewer Assignment Queue</a></div>
 <div class="metrics">
   <div><b>{{ apps|length }}</b><span>Visible applications</span></div>
   <div><b>{{ apps|selectattr('status','equalto','visible_to_college')|list|length }}</b><span>Available to request</span></div>

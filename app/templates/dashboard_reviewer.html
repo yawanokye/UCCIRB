@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}Reviewer Workspace · UCC Ethics Portal{% endblock %}
 {% block content %}
-<div class="pagehead"><div><span class="eyebrow">Reviewer workspace</span><h1>Assigned reviews</h1><p>Declare conflicts before document access. Due dates and overdue assignments are shown below.</p></div></div>
+<div class="pagehead"><div><span class="eyebrow">Reviewer workspace</span><h1>Assigned reviews</h1><p>Declare conflicts before document access. Due dates and overdue assignments are shown below. When the assigning office uses a secure assignment batch, the same applications are also available from the secure link sent to your registered email.</p></div></div>
 <div class="card"><table><thead><tr><th>Reference</th><th>Title</th><th>Review level</th><th>Role</th><th>Due</th><th>Conflict declaration</th><th>Status</th></tr></thead><tbody>
 {% for x in assignments %}
 <tr>

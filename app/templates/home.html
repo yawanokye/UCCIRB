@@ -1,155 +1,66 @@
 {% extends 'base.html' %}
 {% block title %}UCC Ethical Clearance Portal{% endblock %}
 {% block content %}
-<section class="hero portal-hero">
-  <span class="eyebrow">University of Cape Coast · Institutional Review Board</span>
-  <h1>Ethical Clearance Application and Review Portal</h1>
-  <p>All applications are received centrally by the IRB Secretariat. Applications from the five Colleges with Scientific Committees follow controlled College scientific review, while applications from other UCC academic and administrative units remain with the IRB Secretariat for direct IRB processing.</p>
+<section class="public-hero compact-hero">
+  <div class="public-hero-copy">
+    <span class="eyebrow">University of Cape Coast · Institutional Review Board</span>
+    <h1>Apply for Ethical Clearance</h1>
+    <p>Submit your application online, upload the required documents and track the review process from receipt by the IRB Secretariat to the final decision.</p>
+    <div class="hero-actions">
+      <a class="btn hero-primary" href="/register">Start New Application</a>
+      <a class="btn secondary hero-secondary" href="/login?portal=applicant">Applicant Login</a>
+    </div>
+    <p class="hero-note">New applicant? Create your own account and begin immediately.</p>
+  </div>
+  <aside class="hero-help-card">
+    <span class="portal-kicker">Before you apply</span>
+    <h2>Prepare your documents first</h2>
+    <p>Use the official UCC-IRB forms and check the document requirements before opening a new application.</p>
+    <div class="help-links">
+      <a href="/applicant-guide#how-to-apply">How to apply</a>
+      <a href="/applicant-guide#required-documents">Required documents</a>
+      <a href="/applicant-guide#resources">Forms & templates</a>
+      <a href="/applicant-guide#fees">Application fees</a>
+    </div>
+  </aside>
 </section>
 
-<section class="route-notice card">
-  <div class="route-notice-head">
-    <div><span class="eyebrow">Application routing</span><h2>One submission point, two review pathways</h2></div>
-    <span class="route-badge">IRB Secretariat receives all submissions</span>
-  </div>
-  <div class="routing-grid">
-    <div class="route-panel college-route">
-      <h3>College Scientific Committee pathway</h3>
-      <p>These five Colleges have Scientific Committees. After Secretariat screening, the College sees the application, requests access and begins review only after the Secretariat activates the documents.</p>
-      <ul>
-        <li>College of Agriculture and Natural Sciences</li>
-        <li>College of Distance Education</li>
-        <li>College of Education Studies</li>
-        <li>College of Humanities and Legal Studies</li>
-        <li>College of Health and Allied Sciences</li>
-      </ul>
-    </div>
-    <div class="route-panel direct-route">
-      <h3>Direct IRB Secretariat pathway</h3>
-      <p>Applicants from UCC academic or administrative units outside the five Colleges do not pass through a College Scientific Committee. After administrative screening, the Secretariat retains the application and moves it directly to IRB review classification.</p>
-      <span class="route-flow">Secretariat screening → IRB classification → Ethical review → IRB decision</span>
-    </div>
-  </div>
+<section class="public-quick-grid" aria-label="Applicant quick links">
+  <a class="quick-card" href="/applicant-guide#how-to-apply">
+    <span class="quick-icon">1</span><div><strong>How to Apply</strong><small>Follow the online application steps.</small></div>
+  </a>
+  <a class="quick-card" href="/applicant-guide#required-documents">
+    <span class="quick-icon">2</span><div><strong>Required Documents</strong><small>Prepare a complete application package.</small></div>
+  </a>
+  <a class="quick-card" href="/applicant-guide#resources">
+    <span class="quick-icon">3</span><div><strong>Forms & Templates</strong><small>Download official UCC-IRB resources.</small></div>
+  </a>
+  <a class="quick-card" href="/applicant-guide#fees">
+    <span class="quick-icon">4</span><div><strong>Application Fees</strong><small>View the approved fee schedule.</small></div>
+  </a>
 </section>
 
-<section class="login-shell" aria-labelledby="portal-access-title">
-  <div class="login-shell-head">
-    <div>
-      <span class="eyebrow">Secure portal access</span>
-      <h2 id="portal-access-title">Choose your portal</h2>
-    </div>
-    <p>Use the login area that matches your role.</p>
-  </div>
+<section class="home-process-strip">
+  <div><span>01</span><strong>Create account</strong><small>Applicants register themselves.</small></div>
+  <div><span>02</span><strong>Complete application</strong><small>Enter study details and upload documents.</small></div>
+  <div><span>03</span><strong>Submit to Secretariat</strong><small>All applications are received centrally.</small></div>
+  <div><span>04</span><strong>Track review</strong><small>Respond to comments and monitor progress.</small></div>
+</section>
 
-  <div class="portal-tabs portal-tabs-three" role="tablist" aria-label="Portal login options">
-    <button class="portal-tab active" id="applicant-tab" type="button" role="tab" aria-selected="true" aria-controls="applicant-panel" data-panel="applicant-panel">
-      <span class="tab-icon">A</span>
-      <span><strong>Applicant Login</strong><small>Researchers and students</small></span>
-    </button>
-    <button class="portal-tab" id="admin-tab" type="button" role="tab" aria-selected="false" aria-controls="admin-panel" data-panel="admin-panel">
-      <span class="tab-icon">IRB</span>
-      <span><strong>Administrative Portal</strong><small>Committees, reviewers and IRB officers</small></span>
-    </button>
-    <button class="portal-tab system-admin-tab" id="system-admin-tab" type="button" role="tab" aria-selected="false" aria-controls="system-admin-panel" data-panel="system-admin-panel">
-      <span class="tab-icon">SA</span>
-      <span><strong>System Administrator</strong><small>Accounts, roles and system access</small></span>
-    </button>
+<section class="administrative-access-minimal">
+  <div>
+    <span class="eyebrow">Authorised institutional users</span>
+    <h2>Administrative and reviewer access</h2>
+    <p>IRB Secretariat officers, College Scientific Committees, reviewers and IRB leadership use the Administrative Portal. System administration is restricted separately.</p>
   </div>
-
-  <div class="portal-panel active" id="applicant-panel" role="tabpanel" aria-labelledby="applicant-tab">
-    <div class="portal-panel-copy">
-      <span class="portal-kicker">Applicant workspace</span>
-      <h3>Submit and track your ethical clearance application</h3>
-      <p>Applicants create their own accounts, prepare applications, upload required documents, respond to review comments and monitor progress from submission through final IRB decision.</p>
-      <ul class="feature-list">
-        <li>New ethical clearance applications</li>
-        <li>Document uploads and revised submissions</li>
-        <li>Application status and action tracking</li>
-      </ul>
-    </div>
-    <form class="home-login-form" method="post" action="/login">
-      <input type="hidden" name="portal" value="applicant">
-      <h3>Applicant Login</h3>
-      <label>Email address<input type="email" name="email" autocomplete="username" required></label>
-      <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
-      <button class="btn full" type="submit">Sign in as Applicant</button>
-      <a class="btn secondary full create-account-btn" href="/register">Create Applicant Account</a>
-      <p class="form-help">New applicants can create an account and begin an application immediately.</p>
-    </form>
-  </div>
-
-  <div class="portal-panel" id="admin-panel" role="tabpanel" aria-labelledby="admin-tab" hidden>
-    <div class="portal-panel-copy">
-      <span class="portal-kicker">Administrative and review workspace</span>
-      <h3>Access committee and IRB functions</h3>
-      <p>Administrative accounts are created by the System Administrator. Your assigned role opens the correct secure dashboard after login.</p>
-      <div class="role-chips" aria-label="Administrative portal roles">
-        <span>IRB Secretariat</span>
-        <span>College Scientific Committee</span>
-        <span>Scientific Reviewer</span>
-        <span>IRB Reviewer</span>
-        <span>IRB Chairperson</span>
-      </div>
-    </div>
-    <form class="home-login-form admin-form" method="post" action="/login">
-      <input type="hidden" name="portal" value="administrative">
-      <h3>Administrative Login</h3>
-      <label>Institutional email<input type="email" name="email" autocomplete="username" required></label>
-      <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
-      <button class="btn full" type="submit">Sign in to Administrative Portal</button>
-      <p class="form-help">IRB Secretariat, College Scientific Committees, reviewers and IRB leadership.</p>
-    </form>
-  </div>
-
-  <div class="portal-panel system-admin-panel" id="system-admin-panel" role="tabpanel" aria-labelledby="system-admin-tab" hidden>
-    <div class="portal-panel-copy">
-      <span class="portal-kicker">Restricted system administration</span>
-      <h3>Manage portal accounts and institutional access</h3>
-      <p>This portal is reserved for authorised System Administrators. Applicants never register here. Applicants create their own accounts through the Applicant Portal.</p>
-      <ul class="feature-list">
-        <li>Create IRB Secretariat and College Scientific Committee officer accounts</li>
-        <li>Create scientific reviewer, IRB reviewer and IRB leadership accounts</li>
-        <li>Assign roles and Scientific Committee Colleges</li>
-        <li>Deactivate or reactivate administrative accounts</li>
-      </ul>
-    </div>
-    <form class="home-login-form system-admin-form" method="post" action="/system-admin/login">
-      <h3>System Administrator Login</h3>
-      <label>Administrator email<input type="email" name="email" autocomplete="username" required></label>
-      <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
-      <button class="btn red full" type="submit">Sign in as System Administrator</button>
-      <p class="form-help">Restricted system-level access. No public registration is available.</p>
-    </form>
+  <div class="admin-access-actions">
+    <a class="text-login-link" href="/login?portal=administrative">Administrative Portal Login</a>
+    <a class="text-login-link muted-admin" href="/system-admin/login">System Administrator Login</a>
   </div>
 </section>
 
-<section class="steps workflow-steps">
-  <div><b>1</b><h3>Submit centrally</h3><p>Every applicant submits to the IRB Secretariat.</p></div>
-  <div><b>2</b><h3>Route correctly</h3><p>Five Colleges use Scientific Committees. Other UCC units stay with the Secretariat.</p></div>
-  <div><b>3</b><h3>IRB review</h3><p>The IRB completes ethical review, decision and clearance.</p></div>
+<section class="contact-band">
+  <div><strong>Need help with an application?</strong><span>UCC Institutional Review Board Secretariat</span></div>
+  <div><span>0558093143 / 0508878309</span><a href="mailto:irb@ucc.edu.gh">irb@ucc.edu.gh</a></div>
 </section>
-
-<script>
-(() => {
-  const tabs = document.querySelectorAll('.portal-tab');
-  const panels = document.querySelectorAll('.portal-panel');
-  tabs.forEach((tab) => {
-    tab.addEventListener('click', () => {
-      tabs.forEach((item) => {
-        item.classList.remove('active');
-        item.setAttribute('aria-selected', 'false');
-      });
-      panels.forEach((panel) => {
-        panel.classList.remove('active');
-        panel.hidden = true;
-      });
-      tab.classList.add('active');
-      tab.setAttribute('aria-selected', 'true');
-      const panel = document.getElementById(tab.dataset.panel);
-      panel.hidden = false;
-      panel.classList.add('active');
-    });
-  });
-})();
-</script>
 {% endblock %}

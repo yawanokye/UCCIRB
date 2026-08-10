@@ -2,5 +2,11 @@
 {% block title %}Applicant Dashboard · UCC Ethics Portal{% endblock %}
 {% block content %}
 <div class="pagehead"><div><span class="eyebrow">Applicant workspace</span><h1>My ethical clearance applications</h1><p>Submit, revise and track applications through the correct UCC review pathway and final IRB decision.</p></div><a class="btn" href="/applications/new">New Application</a></div>
+
+<div class="applicant-resource-strip">
+  <div><span class="eyebrow">Applicant resources</span><strong>Prepare or revise your application with the official UCC-IRB materials.</strong></div>
+  <div class="resource-strip-links"><a href="/applicant-guide#required-documents">Required documents</a><a href="/applicant-guide#resources">Forms & templates</a><a href="/applicant-guide#fees">Application fees</a></div>
+</div>
+
 <div class="card"><table><thead><tr><th>Reference</th><th>Research title</th><th>Affiliation / pathway</th><th>Status</th><th>Updated</th></tr></thead><tbody>{% for a in apps %}<tr><td>{{ a.reference_no or 'Draft' }}</td><td><a href="/applications/{{ a.id }}">{{ a.title }}</a></td><td>{% if a.college.code == 'IRB-DIRECT' %}{{ a.department or 'Other UCC unit' }}<br><span class="chip direct-chip">Direct IRB Secretariat</span>{% else %}{{ a.college.name }}<br><span class="chip">Scientific Committee</span>{% endif %}</td><td><span class="status {{ a.status }}">{{ a.status.replace('_',' ').title() }}</span></td><td>{{ a.updated_at.strftime('%d %b %Y') }}</td></tr>{% else %}<tr><td colspan="5" class="empty">No applications yet. Create your first ethical clearance application.</td></tr>{% endfor %}</tbody></table></div>
 {% endblock %}

@@ -24,12 +24,26 @@
   <div class="ucc-gold-line"></div>
 </header>
 
+{% if not user %}
+<nav class="public-nav">
+  <div class="public-nav-inner">
+    <a class="public-home-link" href="/">Ethical Clearance Portal</a>
+    <div>
+      <a href="/register">Apply</a>
+      <a href="/login?portal=applicant">Applicant Login</a>
+      <a href="/applicant-guide">Applicant Guide & Resources</a>
+    </div>
+  </div>
+</nav>
+{% endif %}
+
 {% if user %}
 <nav class="nav">
   <div class="nav-inner">
     {% if user.role == 'superadmin' %}<a href="/system-admin">System Administration</a>{% else %}<a href="/dashboard">Dashboard</a>{% endif %}
-    {% if user.role == 'applicant' %}<a href="/applications/new">New Application</a>{% endif %}
-    {% if user.role in ['irb_secretariat','irb_chair'] %}<a href="/irb/meetings">IRB Meetings</a>{% endif %}
+    {% if user.role == 'applicant' %}<a href="/applications/new">New Application</a><a href="/applicant-guide">Applicant Guide & Resources</a>{% endif %}
+    {% if user.role == 'college_admin' %}<a href="/college/review-queue">Review Assignments</a>{% endif %}
+    {% if user.role in ['irb_secretariat','irb_chair'] %}<a href="/irb/review-queue">Review Assignments</a><a href="/irb/meetings">IRB Meetings</a>{% endif %}
     <a href="/account/password">Change Password</a>
   </div>
 </nav>
