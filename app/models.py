@@ -29,6 +29,7 @@ class AppStatus(str, Enum):
     SECRETARIAT_SCREENING = "irb_secretariat_screening"
     RETURNED_ADMIN = "returned_to_applicant_admin"
     ADMIN_COMPLETE = "administratively_complete"
+    FORWARDED_TO_COLLEGE = "forwarded_to_college_scientific_committee"
     VISIBLE_TO_COLLEGE = "visible_to_college"
     COLLEGE_ACCESS_REQUESTED = "college_review_access_requested"
     COLLEGE_REVIEW_AUTHORISED = "college_review_authorised"
@@ -361,3 +362,90 @@ class ReviewReportDocument(Base):
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     assignment = relationship("ReviewerAssignment")
+
+
+class SecretariatDocumentCheck(Base):
+    """Persisted Secretariat screening check for each submitted application document."""
+    __tablename__ = "secretariat_document_checks"
+    __table_args__ = (UniqueConstraint("application_id", "document_id", name="uq_secretariat_document_check"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uuid4_str)
+    application_id: Mapped[str] = mapped_column(ForeignKey("applications.id"), index=True)
+    document_id: Mapped[str] = mapped_column(ForeignKey("application_documents.id"), index=True)
+    verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    checked_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    application = relationship("EthicsApplication")
+    document = relationship("ApplicationDocument")
+
+
+class SecretariatAttentionRequest(Base):
+    """College request asking the IRB Secretariat to attend to a first submission still awaiting screening."""
+    __tablename__ = "secretariat_attention_requests"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uuid4_str)
+    application_id: Mapped[str] = mapped_column(ForeignKey("applications.id"), index=True)
+    college_id: Mapped[str] = mapped_column(ForeignKey("colleges.id"), index=True)
+    requested_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    resolved_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    resolution_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    application = relationship("EthicsApplication")
+    college = relationship("College")
+
+
+class ApplicationSubmission(Base):
+    """Tracks fresh and revised submission events without overwriting the application record."""
+    __tablename__ = "application_submissions"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uuid4_str)
+    application_id: Mapped[str] = mapped_column(ForeignKey("applications.id"), index=True)
+    submission_kind: Mapped[str] = mapped_column(String(40), index=True)  # fresh | college_revision | irb_revision
+    round_no: Mapped[int] = mapped_column(Integer, default=1)
+    submitted_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    submitted_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    application = relationship("EthicsApplication")
+
+
+class DocumentSubmissionMeta(Base):
+    """Marks whether a file belongs to the fresh submission or a later College/IRB revision round."""
+    __tablename__ = "document_submission_meta"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uuid4_str)
+    document_id: Mapped[str] = mapped_column(ForeignKey("application_documents.id"), unique=True, index=True)
+    application_id: Mapped[str] = mapped_column(ForeignKey("applications.id"), index=True)
+    submission_kind: Mapped[str] = mapped_column(String(40), default="fresh", index=True)
+    round_no: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    document = relationship("ApplicationDocument")
+    application = relationship("EthicsApplication")
+
+
+class ReviewerContact(Base):
+    """Reviewer contact entered by a College/IRB office for secure email assignment.
+
+    proxy_user_id links into the existing assignment engine while the real reviewer email remains
+    separate from login accounts, so an applicant can also be a reviewer without an email collision.
+    """
+    __tablename__ = "reviewer_contacts"
+    __table_args__ = (UniqueConstraint("level", "college_id", "email", name="uq_reviewer_contact_scope_email"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uuid4_str)
+    proxy_user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), unique=True, index=True)
+    level: Mapped[str] = mapped_column(String(30), index=True)
+    college_id: Mapped[str | None] = mapped_column(ForeignKey("colleges.id"), nullable=True, index=True)
+    title: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    first_name: Mapped[str] = mapped_column(String(100))
+    last_name: Mapped[str] = mapped_column(String(100))
+    email: Mapped[str] = mapped_column(String(255), index=True)
+    phone: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    proxy_user = relationship("User", foreign_keys=[proxy_user_id])
+    college = relationship("College")

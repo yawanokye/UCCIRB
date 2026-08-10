@@ -10,9 +10,9 @@ from .config import (APP_NAME, BASE_DIR, BOOTSTRAP_ADMIN_EMAIL, BOOTSTRAP_ADMIN_
                      BOOTSTRAP_ADMIN_PASSWORD, SECRET_KEY, SESSION_HTTPS_ONLY, STORAGE_DIR)
 from .database import Base, SessionLocal, engine
 from .routers import auth, portal
-from .models import Role, User
+from .models import (AppStatus, ApplicationDocument, College, CollegeAccessRequest, EthicsApplication, Role, User)
 from .services.auth import hash_password
-from .services.routing import ensure_routing_units
+from .services.routing import ensure_routing_units, is_scientific_committee_college
 from sqlalchemy import select
 
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -73,6 +73,42 @@ def bootstrap_superadmin():
 
 bootstrap_superadmin()
 
+
+def migrate_v11_legacy_college_routing():
+    """Upgrade V10 College states to the V11 automatic-forwarding rule.
+
+    V10 used visible/locked/access-request states. V11 forwards a complete first submission
+    directly to the College, so legacy records in those transitional states are activated and
+    moved into the College receiving queue without deleting their history.
+    """
+    legacy_states = {
+        AppStatus.ADMIN_COMPLETE.value,
+        AppStatus.VISIBLE_TO_COLLEGE.value,
+        AppStatus.COLLEGE_ACCESS_REQUESTED.value,
+        AppStatus.COLLEGE_REVIEW_AUTHORISED.value,
+    }
+    with SessionLocal() as db:
+        rows = db.scalars(select(EthicsApplication).where(EthicsApplication.status.in_(legacy_states))).all()
+        changed = False
+        for application in rows:
+            college = db.get(College, application.college_id)
+            if not is_scientific_committee_college(college):
+                continue
+            for doc in db.scalars(select(ApplicationDocument).where(ApplicationDocument.application_id == application.id)).all():
+                doc.active_for_college = True
+            application.status = AppStatus.FORWARDED_TO_COLLEGE.value
+            for req in db.scalars(select(CollegeAccessRequest).where(
+                CollegeAccessRequest.application_id == application.id, CollegeAccessRequest.status == 'pending'
+            )).all():
+                req.status = 'superseded'
+                req.decision_note = 'Superseded by V11 automatic forwarding after Secretariat completeness screening.'
+            changed = True
+        if changed:
+            db.commit()
+
+
+migrate_v11_legacy_college_routing()
+
 app = FastAPI(title=APP_NAME)
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, https_only=SESSION_HTTPS_ONLY, same_site='lax')
 app.mount('/static', StaticFiles(directory=BASE_DIR / 'app' / 'static'), name='static')
@@ -81,7 +117,7 @@ app.include_router(auth.router)
 app.include_router(portal.router)
 
 
-BUILD_ID = '2026-08-10-applicant-resources-v10'
+BUILD_ID = '2026-08-10-secretariat-college-workflow-v11'
 
 @app.get('/healthz', include_in_schema=False)
 def healthz():
@@ -94,4 +130,8 @@ def healthz():
         'review_assignment_workflow': 'secure-batch-v1',
         'applicant_resources': 'official-ucc-irb-v1',
         'public_applicant_guide': True,
+        'secretariat_document_checklist': True,
+        'submission_register': True,
+        'college_direct_revision_workflow': True,
+        'college_email_reviewer_assignment': True,
     })
