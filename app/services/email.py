@@ -54,7 +54,8 @@ def send_gmail_html(to: str, subject: str, html: str) -> str:
 
 
 def review_assignment_email(*, reviewer_name: str, reviewer_email: str, level: str, count: int,
-                            secure_url: str, due_at, link_expires_at, message: str = '') -> str:
+                            secure_url: str, due_at, link_expires_at, message: str = '',
+                            assigning_office: str = 'Institutional Review Board Secretariat') -> str:
     review_label = 'College Scientific Review' if level == 'college' else 'IRB Ethical Review'
     optional_message = f'<p><strong>Message from the assigning office:</strong><br>{escape(message)}</p>' if message else ''
     due_text = due_at.strftime('%d %B %Y, %H:%M UTC')
@@ -72,7 +73,44 @@ def review_assignment_email(*, reviewer_name: str, reviewer_email: str, level: s
         <strong>Review timeline</strong><br>Review due: <strong>{escape(due_text)}</strong><br>Secure link expires: <strong>{escape(expiry_text)}</strong>
       </div>
       <p>Please do not forward the secure link.</p>
-      <p>Regards,<br>Institutional Review Board Secretariat<br>University of Cape Coast</p>
+      <p>Regards,<br>{escape(assigning_office)}<br>University of Cape Coast</p>
     </div></body></html>'''
     send_gmail_html(reviewer_email, f'UCC {review_label} Assignment', html)
+    return html
+
+
+def college_revision_request_email(*, applicant_name: str, applicant_email: str, reference_no: str,
+                                   research_title: str, college_name: str, decision: str,
+                                   comments: str, application_url: str) -> str:
+    comments_html = f'<div style="margin:18px 0;padding:15px;background:#fff7dc;border-left:4px solid #c69b2d"><strong>Committee comments</strong><br>{escape(comments)}</div>' if comments else ''
+    html = f'''<!doctype html><html><body style="font-family:Arial,sans-serif;color:#182431;line-height:1.55">
+    <div style="max-width:680px;margin:auto;padding:24px">
+      <div style="font-size:12px;text-transform:uppercase;color:#c69b2d;font-weight:bold">University of Cape Coast</div>
+      <h2 style="color:#082b4c">Scientific Review Revision Required</h2>
+      <p>Dear {escape(applicant_name)},</p>
+      <p>The {escape(college_name)} Scientific Committee has reviewed your ethical-clearance application <strong>{escape(reference_no)}</strong>, “{escape(research_title)}”.</p>
+      <p><strong>Decision:</strong> {escape(decision)}</p>
+      {comments_html}
+      <p>Please upload the revised documents and a response to the College review through your applicant portal. Your revised submission will go directly back to the College Scientific Committee.</p>
+      <p><a href="{escape(application_url)}" style="display:inline-block;background:#082b4c;color:#fff;text-decoration:none;padding:12px 18px;border-radius:7px;font-weight:bold">Open Application</a></p>
+      <p>Regards,<br>{escape(college_name)} Scientific Committee<br>University of Cape Coast</p>
+    </div></body></html>'''
+    send_gmail_html(applicant_email, f'UCC Scientific Review Revision Required · {reference_no}', html)
+    return html
+
+
+def college_revision_submitted_email(*, officer_name: str, officer_email: str, applicant_name: str,
+                                     reference_no: str, research_title: str, college_name: str,
+                                     application_url: str) -> str:
+    html = f'''<!doctype html><html><body style="font-family:Arial,sans-serif;color:#182431;line-height:1.55">
+    <div style="max-width:680px;margin:auto;padding:24px">
+      <div style="font-size:12px;text-transform:uppercase;color:#c69b2d;font-weight:bold">University of Cape Coast</div>
+      <h2 style="color:#082b4c">Revised Scientific Review Submission Received</h2>
+      <p>Dear {escape(officer_name)},</p>
+      <p><strong>{escape(applicant_name)}</strong> has submitted revised documents for application <strong>{escape(reference_no)}</strong>, “{escape(research_title)}”.</p>
+      <p>The revision has been routed directly to the <strong>{escape(college_name)} Scientific Committee</strong> and is ready for further scientific review.</p>
+      <p><a href="{escape(application_url)}" style="display:inline-block;background:#082b4c;color:#fff;text-decoration:none;padding:12px 18px;border-radius:7px;font-weight:bold">Open Revised Application</a></p>
+      <p>Regards,<br>UCC Ethical Clearance Portal</p>
+    </div></body></html>'''
+    send_gmail_html(officer_email, f'UCC Revised Scientific Review Submission · {reference_no}', html)
     return html
