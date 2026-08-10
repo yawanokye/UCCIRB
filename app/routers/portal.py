@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import csv
 import hashlib
 import io
 import secrets
@@ -8,7 +9,7 @@ import string
 import zipfile
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
@@ -18,6 +19,7 @@ from ..database import get_db
 from ..models import (
     AppStatus,
     ApplicationDocument,
+    ApplicationSubmission,
     AuditLog,
     ClearanceCertificate,
     College,
@@ -29,19 +31,24 @@ from ..models import (
     IRBMeeting,
     IRBMeetingItem,
     PostApprovalRequest,
+    DocumentSubmissionMeta,
     ReviewAssignmentMeta,
     ReviewAssignmentBatch,
     ReviewAssignmentBatchItem,
     ReviewReportDocument,
     ReviewerAssignment,
     ReviewerDeclaration,
+    ReviewerContact,
+    SecretariatAttentionRequest,
+    SecretariatDocumentCheck,
     Role,
     StatusHistory,
     User,
 )
 from ..services.auth import hash_password, require_roles, require_user
 from ..services.certificate import certificate_path, generate_certificate_pdf
-from ..services.email import gmail_configured, review_assignment_email
+from ..services.email import (college_revision_request_email, college_revision_submitted_email,
+                              gmail_configured, review_assignment_email)
 from ..services.storage import save_upload, storage_path
 from ..services.workflow import audit, transition
 from ..services.routing import (
@@ -60,6 +67,177 @@ router = APIRouter()
 def ctx(request, user=None, **kwargs):
     return {'request': request, 'user': user, **kwargs}
 
+
+
+
+def affiliation_label(app: EthicsApplication) -> str:
+    if app.college and is_direct_irb_affiliation(app.college):
+        return app.department or 'Other UCC Academic/Administrative Unit'
+    return app.college.name if app.college else 'Unassigned'
+
+
+def required_document_rows(app: EthicsApplication, documents: list[ApplicationDocument]):
+    present = {d.document_type for d in documents}
+    rows = []
+    protocol_ok = bool({'Research Protocol', 'Completed UCC-IRB Composite Form'} & present)
+    rows.append(('Research Protocol / Completed UCC-IRB Composite Form', protocol_ok))
+    for label in ['Application Letter', 'Similarity Report', 'Applicant Abridged CV']:
+        rows.append((label, label in present))
+    if app.applicant_type.lower() == 'student':
+        for label in ['Supervisor Approval', 'Head of Unit Support Letter', 'Supervisor Abridged CV']:
+            rows.append((label, label in present))
+    checklist_ok = 'Completed UCC-IRB Composite Form' in present or 'Completed IRB Checklist' in present
+    rows.append(('Completed IRB Checklist (or checklist contained in Composite Form)', checklist_ok))
+    return rows
+
+
+def document_check_map(db: Session, app_id: str):
+    rows = db.scalars(
+        select(SecretariatDocumentCheck).where(SecretariatDocumentCheck.application_id == app_id)
+    ).all()
+    return {r.document_id: r for r in rows}
+
+
+def document_stage_map(db: Session, document_ids: list[str]):
+    if not document_ids:
+        return {}
+    rows = db.scalars(
+        select(DocumentSubmissionMeta).where(DocumentSubmissionMeta.document_id.in_(document_ids))
+    ).all()
+    return {r.document_id: r for r in rows}
+
+
+def current_upload_stage(db: Session, app: EthicsApplication):
+    if app.status == AppStatus.COLLEGE_REVISION.value:
+        prior = db.scalar(select(func.count(ApplicationSubmission.id)).where(
+            ApplicationSubmission.application_id == app.id,
+            ApplicationSubmission.submission_kind == 'college_revision',
+        )) or 0
+        return 'college_revision', prior + 1
+    if app.status == AppStatus.IRB_REVISION.value:
+        prior = db.scalar(select(func.count(ApplicationSubmission.id)).where(
+            ApplicationSubmission.application_id == app.id,
+            ApplicationSubmission.submission_kind == 'irb_revision',
+        )) or 0
+        return 'irb_revision', prior + 1
+    return 'fresh', 1
+
+
+def latest_submission_kind_map(db: Session, application_ids: list[str]):
+    result = {app_id: 'fresh' for app_id in application_ids}
+    if not application_ids:
+        return result
+    rows = db.scalars(
+        select(ApplicationSubmission)
+        .where(ApplicationSubmission.application_id.in_(application_ids))
+        .order_by(ApplicationSubmission.application_id, ApplicationSubmission.submitted_at.desc())
+    ).all()
+    seen = set()
+    for row in rows:
+        if row.application_id not in seen:
+            result[row.application_id] = row.submission_kind
+            seen.add(row.application_id)
+    return result
+
+
+def latest_submission_map(db: Session, application_ids: list[str]):
+    result = {}
+    if not application_ids:
+        return result
+    rows = db.scalars(
+        select(ApplicationSubmission)
+        .where(ApplicationSubmission.application_id.in_(application_ids))
+        .order_by(ApplicationSubmission.application_id, ApplicationSubmission.submitted_at.desc())
+    ).all()
+    for row in rows:
+        result.setdefault(row.application_id, row)
+    return result
+
+
+def reviewer_contact_for_proxy(db: Session, proxy_user_id: str):
+    return db.scalar(select(ReviewerContact).where(ReviewerContact.proxy_user_id == proxy_user_id))
+
+
+def reviewer_contact_map_for_batches(db: Session, batches: list[ReviewAssignmentBatch]):
+    proxy_ids = [b.reviewer_id for b in batches]
+    if not proxy_ids:
+        return {}
+    contacts = db.scalars(select(ReviewerContact).where(ReviewerContact.proxy_user_id.in_(proxy_ids))).all()
+    by_proxy = {c.proxy_user_id: c for c in contacts}
+    return {b.id: by_proxy.get(b.reviewer_id) for b in batches}
+
+
+def get_or_create_reviewer_contact(db: Session, actor: User, *, level: str, title: str,
+                                   first_name: str, last_name: str, email: str, phone: str = ''):
+    email = email.strip().lower()
+    if '@' not in email:
+        raise HTTPException(400, 'Enter a valid reviewer email address.')
+    first_name = first_name.strip()
+    last_name = last_name.strip()
+    if not first_name or not last_name:
+        raise HTTPException(400, 'Enter the reviewer first name and surname.')
+    college_id = actor.college_id if level == 'college' else None
+    existing = db.scalar(select(ReviewerContact).where(
+        ReviewerContact.level == level,
+        ReviewerContact.college_id == college_id,
+        ReviewerContact.email == email,
+    ))
+    full_name = ' '.join(x for x in [title.strip(), first_name, last_name] if x)
+    if existing:
+        existing.title = title.strip() or None
+        existing.first_name = first_name
+        existing.last_name = last_name
+        existing.phone = phone.strip() or None
+        existing.active = True
+        proxy = db.get(User, existing.proxy_user_id)
+        if proxy:
+            proxy.full_name = full_name
+            proxy.college_id = college_id
+            proxy.role = 'reviewer_contact_proxy'
+            proxy.active = False
+        return existing, proxy
+
+    fingerprint = hashlib.sha256(f'{level}|{college_id or "irb"}|{email}'.encode()).hexdigest()[:24]
+    proxy_email = f'reviewer-{fingerprint}@internal.ucc-irb.local'
+    proxy = db.scalar(select(User).where(User.email == proxy_email))
+    if not proxy:
+        proxy = User(
+            email=proxy_email,
+            full_name=full_name,
+            password_hash=hash_password(secrets.token_urlsafe(36)),
+            role='reviewer_contact_proxy',
+            college_id=college_id,
+            active=False,
+        )
+        db.add(proxy)
+        db.flush()
+    contact = ReviewerContact(
+        proxy_user_id=proxy.id,
+        level=level,
+        college_id=college_id,
+        title=title.strip() or None,
+        first_name=first_name,
+        last_name=last_name,
+        email=email,
+        phone=phone.strip() or None,
+        active=True,
+        created_by=actor.id,
+    )
+    db.add(contact)
+    db.flush()
+    return contact, proxy
+
+
+def resolve_attention_requests(db: Session, app_id: str, actor_id: str, note: str):
+    pending = db.scalars(select(SecretariatAttentionRequest).where(
+        SecretariatAttentionRequest.application_id == app_id,
+        SecretariatAttentionRequest.status == 'pending',
+    )).all()
+    for req in pending:
+        req.status = 'resolved'
+        req.resolved_by = actor_id
+        req.resolved_at = datetime.utcnow()
+        req.resolution_note = note
 
 def get_app_or_404(db: Session, app_id: str):
     app = db.scalar(
@@ -127,13 +305,17 @@ def can_view_documents(db: Session, user: User, app: EthicsApplication) -> bool:
     if user.id == app.applicant_id or user.role in {Role.SUPERADMIN.value, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value}:
         return True
     if user.role == Role.COLLEGE_ADMIN.value and user.college_id == app.college_id:
-        granted = db.scalar(
-            select(CollegeAccessRequest.id).where(
-                CollegeAccessRequest.application_id == app.id,
-                CollegeAccessRequest.status == 'granted',
-            )
-        )
-        return granted is not None
+        # The College may see metadata from first submission, but substantive documents become
+        # available automatically only after the Secretariat marks the application complete
+        # and forwards it to the Scientific Committee.
+        locked = {
+            AppStatus.DRAFT.value,
+            AppStatus.SUBMITTED.value,
+            AppStatus.SECRETARIAT_SCREENING.value,
+            AppStatus.RETURNED_ADMIN.value,
+            AppStatus.ADMIN_COMPLETE.value,
+        }
+        return app.status not in locked and is_scientific_committee_college(app.college)
     if user.role in {Role.COLLEGE_REVIEWER.value, Role.IRB_REVIEWER.value}:
         return assigned_to(db, user, app) and reviewer_has_clear_declaration(db, user, app)
     return False
@@ -284,7 +466,7 @@ def complete_review_assignment(db: Session, assignment: ReviewerAssignment, acto
 
 def current_review_round_start(db: Session, app_id: str, level: str) -> datetime:
     milestones = (
-        [AppStatus.AWAITING_COLLEGE_REVIEWER.value, AppStatus.COLLEGE_REVISED.value]
+        [AppStatus.FORWARDED_TO_COLLEGE.value, AppStatus.AWAITING_COLLEGE_REVIEWER.value, AppStatus.COLLEGE_REVISED.value]
         if level == 'college'
         else [AppStatus.AWAITING_IRB_REVIEWER.value, AppStatus.IRB_REVISED.value]
     )
@@ -397,12 +579,25 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     if user.role == Role.COLLEGE_ADMIN.value:
         apps = db.scalars(
             select(EthicsApplication)
-            .options(joinedload(EthicsApplication.applicant))
+            .options(joinedload(EthicsApplication.applicant), joinedload(EthicsApplication.college))
             .where(EthicsApplication.college_id == user.college_id, EthicsApplication.status != AppStatus.DRAFT.value)
             .order_by(EthicsApplication.updated_at.desc())
         ).unique().all()
-        counts = {s: sum(1 for a in apps if a.status == s) for s in set(a.status for a in apps)}
-        return request.app.state.templates.TemplateResponse(request, 'dashboard_college.html', ctx(request, user, apps=apps, counts=counts))
+        kinds = latest_submission_kind_map(db, [a.id for a in apps])
+        pending_initial = [a for a in apps if a.status in {AppStatus.SUBMITTED.value, AppStatus.SECRETARIAT_SCREENING.value}]
+        fresh_apps = [a for a in apps if a not in pending_initial and kinds.get(a.id, 'fresh') == 'fresh']
+        revised_apps = [a for a in apps if kinds.get(a.id) == 'college_revision']
+        pending_attention = db.scalars(select(SecretariatAttentionRequest).where(
+            SecretariatAttentionRequest.college_id == user.college_id,
+            SecretariatAttentionRequest.status == 'pending',
+        )).all()
+        attention_by_app = {r.application_id: r for r in pending_attention}
+        counts = {st: sum(1 for a in apps if a.status == st) for st in set(a.status for a in apps)}
+        return request.app.state.templates.TemplateResponse(
+            request, 'dashboard_college.html',
+            ctx(request, user, apps=apps, counts=counts, pending_initial=pending_initial, fresh_apps=fresh_apps,
+                revised_apps=revised_apps, attention_by_app=attention_by_app, submission_kinds=kinds)
+        )
 
     if user.role in {Role.COLLEGE_REVIEWER.value, Role.IRB_REVIEWER.value}:
         assignments = db.scalars(
@@ -420,7 +615,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     if user.role == Role.SUPERADMIN.value:
         users = db.scalars(select(User).options(joinedload(User.college)).order_by(User.created_at.desc())).all()
         colleges = get_scientific_committee_colleges(db)
-        admin_users = [u for u in users if u.role != Role.APPLICANT.value]
+        admin_users = [u for u in users if u.role not in {Role.APPLICANT.value, 'reviewer_contact_proxy'}]
         applicant_count = sum(1 for u in users if u.role == Role.APPLICANT.value)
         return request.app.state.templates.TemplateResponse(
             request,
@@ -441,6 +636,15 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
             .where(CollegeAccessRequest.status == 'pending')
             .order_by(CollegeAccessRequest.requested_at)
         ).all()
+        pending_attention = db.scalars(
+            select(SecretariatAttentionRequest)
+            .options(
+                joinedload(SecretariatAttentionRequest.application).joinedload(EthicsApplication.college),
+                joinedload(SecretariatAttentionRequest.application).joinedload(EthicsApplication.applicant),
+            )
+            .where(SecretariatAttentionRequest.status == 'pending')
+            .order_by(SecretariatAttentionRequest.requested_at)
+        ).all()
         post_requests = db.scalars(
             select(PostApprovalRequest)
             .options(joinedload(PostApprovalRequest.application))
@@ -450,12 +654,13 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         meetings_count = db.scalar(select(func.count(IRBMeeting.id))) or 0
         direct_apps = [a for a in apps if is_direct_irb_affiliation(a.college)]
         college_path_apps = [a for a in apps if is_scientific_committee_college(a.college)]
+        screening_apps = [a for a in apps if a.status in {AppStatus.SUBMITTED.value, AppStatus.SECRETARIAT_SCREENING.value}]
         return request.app.state.templates.TemplateResponse(
             request,
             'dashboard_secretariat.html',
             ctx(
                 request, user, apps=apps, pending_access=pending_access, post_requests=post_requests,
-                meetings_count=meetings_count, direct_apps=direct_apps, college_path_apps=college_path_apps,
+                meetings_count=meetings_count, direct_apps=direct_apps, college_path_apps=college_path_apps, screening_apps=screening_apps, pending_attention=pending_attention,
             ),
         )
 
@@ -468,7 +673,7 @@ def system_admin_portal(request: Request, db: Session = Depends(get_db)):
     require_roles(user, Role.SUPERADMIN.value)
     users = db.scalars(select(User).options(joinedload(User.college)).order_by(User.created_at.desc())).all()
     colleges = get_scientific_committee_colleges(db)
-    admin_users = [u for u in users if u.role != Role.APPLICANT.value]
+    admin_users = [u for u in users if u.role not in {Role.APPLICANT.value, 'reviewer_contact_proxy'}]
     applicant_count = sum(1 for u in users if u.role == Role.APPLICANT.value)
     return request.app.state.templates.TemplateResponse(
         request,
@@ -520,7 +725,7 @@ def create_administrative_user(
     colleges = get_scientific_committee_colleges(db)
 
     def render_error(message: str):
-        admin_users = [u for u in users if u.role != Role.APPLICANT.value]
+        admin_users = [u for u in users if u.role not in {Role.APPLICANT.value, 'reviewer_contact_proxy'}]
         applicant_count = sum(1 for u in users if u.role == Role.APPLICANT.value)
         return request.app.state.templates.TemplateResponse(
             request,
@@ -563,7 +768,7 @@ def create_administrative_user(
     db.commit()
 
     users = db.scalars(select(User).options(joinedload(User.college)).order_by(User.created_at.desc())).all()
-    admin_users = [u for u in users if u.role != Role.APPLICANT.value]
+    admin_users = [u for u in users if u.role not in {Role.APPLICANT.value, 'reviewer_contact_proxy'}]
     applicant_count = sum(1 for u in users if u.role == Role.APPLICANT.value)
     return request.app.state.templates.TemplateResponse(
         request,
@@ -653,6 +858,17 @@ def application_detail(request: Request, app_id: str, db: Session = Depends(get_
             .where(ApplicationDocument.application_id == app.id)
             .order_by(ApplicationDocument.document_type, ApplicationDocument.version.desc())
         ).all()
+    stage_map = document_stage_map(db, [d.id for d in documents])
+    fresh_documents = [d for d in documents if not stage_map.get(d.id) or stage_map[d.id].submission_kind == 'fresh']
+    college_revision_documents = [d for d in documents if stage_map.get(d.id) and stage_map[d.id].submission_kind == 'college_revision']
+    irb_revision_documents = [d for d in documents if stage_map.get(d.id) and stage_map[d.id].submission_kind == 'irb_revision']
+    screening_checks = document_check_map(db, app.id) if user.role in {Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value} else {}
+    required_rows = required_document_rows(app, documents) if can_docs else []
+    attention_requests = db.scalars(
+        select(SecretariatAttentionRequest)
+        .where(SecretariatAttentionRequest.application_id == app.id)
+        .order_by(SecretariatAttentionRequest.requested_at.desc())
+    ).all()
     access = db.scalars(
         select(CollegeAccessRequest)
         .where(CollegeAccessRequest.application_id == app.id)
@@ -717,6 +933,13 @@ def application_detail(request: Request, app_id: str, db: Session = Depends(get_
             user,
             app=app,
             documents=documents,
+            fresh_documents=fresh_documents,
+            college_revision_documents=college_revision_documents,
+            irb_revision_documents=irb_revision_documents,
+            document_stages=stage_map,
+            screening_checks=screening_checks,
+            required_document_rows=required_rows,
+            attention_requests=attention_requests,
             access_requests=access,
             assignments=assignments,
             declarations=declarations,
@@ -772,7 +995,12 @@ def upload_document(
         uploaded_by=user.id,
     )
     db.add(doc)
-    audit(db, user.id, 'document_uploaded', app.id, f'{document_type} v{doc.version}: {original}')
+    db.flush()
+    submission_kind, round_no = current_upload_stage(db, app)
+    db.add(DocumentSubmissionMeta(
+        document_id=doc.id, application_id=app.id, submission_kind=submission_kind, round_no=round_no
+    ))
+    audit(db, user.id, 'document_uploaded', app.id, f'{document_type} v{doc.version}: {original} | {submission_kind} round {round_no}')
     db.commit()
     return RedirectResponse(f'/applications/{app.id}', status_code=303)
 
@@ -810,6 +1038,11 @@ def submit_application(request: Request, app_id: str, db: Session = Depends(get_
         seq = (db.scalar(select(func.count(EthicsApplication.id)).where(EthicsApplication.submitted_at.is_not(None))) or 0) + 1
         app.reference_no = f'UCC-IRB-{datetime.utcnow().year}-{seq:05d}'
     app.submitted_at = datetime.utcnow()
+    existing_fresh = db.scalar(select(ApplicationSubmission.id).where(
+        ApplicationSubmission.application_id == app.id, ApplicationSubmission.submission_kind == 'fresh'
+    ))
+    if not existing_fresh:
+        db.add(ApplicationSubmission(application_id=app.id, submission_kind='fresh', round_no=1, submitted_by=user.id, submitted_at=app.submitted_at))
     transition(db, app, AppStatus.SUBMITTED.value, user.id, 'Submitted centrally to IRB Secretariat')
     db.commit()
     return RedirectResponse(f'/applications/{app.id}', status_code=303)
@@ -824,10 +1057,12 @@ def submit_revision(request: Request, app_id: str, db: Session = Depends(get_db)
     if app.status == AppStatus.COLLEGE_REVISION.value:
         required_type = 'Response to College Review'
         next_status = AppStatus.COLLEGE_REVISED.value
-        note = 'Applicant submitted revised documents to College Scientific Committee'
+        submission_kind = 'college_revision'
+        note = 'Applicant submitted revised documents directly to the College Scientific Committee'
     elif app.status == AppStatus.IRB_REVISION.value:
         required_type = 'Response to IRB Review'
         next_status = AppStatus.IRB_REVISED.value
+        submission_kind = 'irb_revision'
         note = 'Applicant submitted revised documents for IRB review'
     else:
         raise HTTPException(400, 'No revision is currently requested')
@@ -839,7 +1074,64 @@ def submit_revision(request: Request, app_id: str, db: Session = Depends(get_db)
     )
     if not present:
         raise HTTPException(400, f'Upload {required_type} before submitting the revision.')
+    round_no = (db.scalar(select(func.count(ApplicationSubmission.id)).where(
+        ApplicationSubmission.application_id == app.id,
+        ApplicationSubmission.submission_kind == submission_kind,
+    )) or 0) + 1
+    db.add(ApplicationSubmission(
+        application_id=app.id, submission_kind=submission_kind, round_no=round_no, submitted_by=user.id
+    ))
     transition(db, app, next_status, user.id, note)
+    audit(db, user.id, 'revised_application_submitted', app.id, f'{submission_kind} round {round_no}')
+    db.commit()
+
+    if submission_kind == 'college_revision' and gmail_configured():
+        college_admins = db.scalars(select(User).where(
+            User.role == Role.COLLEGE_ADMIN.value, User.college_id == app.college_id, User.active == True
+        )).all()
+        for officer in college_admins:
+            try:
+                college_revision_submitted_email(
+                    officer_name=officer.full_name, officer_email=officer.email, applicant_name=app.applicant.full_name,
+                    reference_no=app.reference_no or '', research_title=app.title, college_name=app.college.name,
+                    application_url=f'{_base_url(request)}/applications/{app.id}'
+                )
+            except Exception as exc:
+                audit(db, user.id, 'college_revision_notification_failed', app.id, str(exc)[:500])
+                db.commit()
+    return RedirectResponse(f'/applications/{app.id}', status_code=303)
+
+
+@router.post('/secretariat/{app_id}/checklist')
+def save_secretariat_checklist(
+    request: Request,
+    app_id: str,
+    checked_document_ids: list[str] = Form([]),
+    checklist_note: str = Form(''),
+    db: Session = Depends(get_db),
+):
+    user = require_user(request, db)
+    require_roles(user, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value)
+    app = get_app_or_404(db, app_id)
+    if app.status not in {AppStatus.SUBMITTED.value, AppStatus.SECRETARIAT_SCREENING.value}:
+        raise HTTPException(400, 'The Secretariat checklist is only available during initial screening.')
+    documents = db.scalars(select(ApplicationDocument).where(ApplicationDocument.application_id == app.id)).all()
+    valid_ids = {d.id for d in documents}
+    checked = set(checked_document_ids) & valid_ids
+    existing = document_check_map(db, app.id)
+    now = datetime.utcnow()
+    for doc in documents:
+        row = existing.get(doc.id)
+        if not row:
+            row = SecretariatDocumentCheck(application_id=app.id, document_id=doc.id)
+            db.add(row)
+        row.verified = doc.id in checked
+        row.note = checklist_note.strip() or None
+        row.checked_by = user.id
+        row.checked_at = now
+    if app.status == AppStatus.SUBMITTED.value:
+        transition(db, app, AppStatus.SECRETARIAT_SCREENING.value, user.id, 'IRB Secretariat document checklist started')
+    audit(db, user.id, 'secretariat_document_checklist_saved', app.id, f'{len(checked)}/{len(documents)} documents verified')
     db.commit()
     return RedirectResponse(f'/applications/{app.id}', status_code=303)
 
@@ -857,19 +1149,150 @@ def secretariat_screen(
     app = get_app_or_404(db, app_id)
     if app.status not in {AppStatus.SUBMITTED.value, AppStatus.SECRETARIAT_SCREENING.value}:
         raise HTTPException(400, 'Application is not awaiting Secretariat screening.')
+
+    documents = db.scalars(select(ApplicationDocument).where(ApplicationDocument.application_id == app.id)).all()
     if outcome == 'complete':
+        required_rows = required_document_rows(app, documents)
+        missing = [label for label, present in required_rows if not present]
+        checks = document_check_map(db, app.id)
+        unchecked = [d for d in documents if not checks.get(d.id) or not checks[d.id].verified]
+        if missing:
+            raise HTTPException(400, 'Cannot mark complete. Required item(s) missing: ' + ', '.join(missing))
+        if unchecked:
+            raise HTTPException(400, 'Cannot mark complete until every submitted document is checked in the Secretariat checklist.')
+
         transition(db, app, AppStatus.ADMIN_COMPLETE.value, user.id, note or 'Administrative screening complete')
+        resolve_attention_requests(db, app.id, user.id, 'Secretariat screening completed')
         if is_scientific_committee_college(app.college):
-            transition(db, app, AppStatus.VISIBLE_TO_COLLEGE.value, user.id, 'Metadata visible to the relevant College Scientific Committee; documents remain locked pending Secretariat authorisation')
+            for doc in documents:
+                doc.active_for_college = True
+            transition(
+                db, app, AppStatus.FORWARDED_TO_COLLEGE.value, user.id,
+                f'Administratively complete and forwarded to {app.college.name} Scientific Committee'
+            )
         else:
             transition(db, app, AppStatus.DIRECT_IRB.value, user.id, 'Affiliation has no College Scientific Committee. Application retained by the IRB Secretariat for direct IRB review classification')
     elif outcome == 'return':
         app.secretariat_note = note
+        resolve_attention_requests(db, app.id, user.id, 'Application returned to applicant for administrative correction')
         transition(db, app, AppStatus.RETURNED_ADMIN.value, user.id, note or 'Returned for administrative correction')
     else:
         raise HTTPException(400, 'Unknown screening outcome')
     db.commit()
     return RedirectResponse(f'/applications/{app.id}', status_code=303)
+
+
+@router.post('/college/{app_id}/request-secretariat-attention')
+def request_secretariat_attention(
+    request: Request,
+    app_id: str,
+    note: str = Form(''),
+    db: Session = Depends(get_db),
+):
+    user = require_user(request, db)
+    require_roles(user, Role.COLLEGE_ADMIN.value)
+    app = get_app_or_404(db, app_id)
+    if user.college_id != app.college_id or not is_scientific_committee_college(app.college):
+        raise HTTPException(403)
+    if app.status not in {AppStatus.SUBMITTED.value, AppStatus.SECRETARIAT_SCREENING.value}:
+        raise HTTPException(400, 'This application is no longer waiting at the IRB Secretariat for initial screening.')
+    existing = db.scalar(select(SecretariatAttentionRequest.id).where(
+        SecretariatAttentionRequest.application_id == app.id,
+        SecretariatAttentionRequest.status == 'pending',
+    ))
+    if existing:
+        raise HTTPException(409, 'A Secretariat attention request is already pending for this application.')
+    req = SecretariatAttentionRequest(
+        application_id=app.id, college_id=app.college_id, requested_by=user.id, note=note.strip() or None
+    )
+    db.add(req)
+    audit(db, user.id, 'college_requested_secretariat_attention', app.id, note.strip() or 'Please attend to this first submission')
+    db.commit()
+    return RedirectResponse('/dashboard', status_code=303)
+
+
+@router.post('/secretariat/attention/{request_id}/resolve')
+def resolve_secretariat_attention(
+    request: Request,
+    request_id: str,
+    note: str = Form(''),
+    db: Session = Depends(get_db),
+):
+    user = require_user(request, db)
+    require_roles(user, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value)
+    req = db.get(SecretariatAttentionRequest, request_id)
+    if not req or req.status != 'pending':
+        raise HTTPException(404, 'Pending attention request not found.')
+    req.status = 'resolved'
+    req.resolved_by = user.id
+    req.resolved_at = datetime.utcnow()
+    req.resolution_note = note.strip() or 'Acknowledged by IRB Secretariat'
+    audit(db, user.id, 'secretariat_attention_request_resolved', req.application_id, req.resolution_note)
+    db.commit()
+    return RedirectResponse(f'/applications/{req.application_id}', status_code=303)
+
+
+@router.get('/secretariat/register')
+def secretariat_register(request: Request, db: Session = Depends(get_db)):
+    user = require_user(request, db)
+    require_roles(user, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value)
+    apps = db.scalars(
+        select(EthicsApplication)
+        .options(joinedload(EthicsApplication.applicant), joinedload(EthicsApplication.college))
+        .where(EthicsApplication.status != AppStatus.DRAFT.value)
+    ).unique().all()
+    kinds = latest_submission_kind_map(db, [a.id for a in apps])
+    latest_submissions = latest_submission_map(db, [a.id for a in apps])
+    direct_units = sorted({a.department for a in apps if a.college and is_direct_irb_affiliation(a.college) and a.department})
+    colleges = get_scientific_committee_colleges(db)
+
+    q = (request.query_params.get('q') or '').strip().lower()
+    affiliation = request.query_params.get('affiliation') or ''
+    status_filter = request.query_params.get('status') or ''
+    kind_filter = request.query_params.get('submission_kind') or ''
+    sort_by = request.query_params.get('sort') or 'submitted_at'
+    direction = request.query_params.get('direction') or 'desc'
+
+    def matches(a):
+        if q and q not in ' '.join([a.reference_no or '', a.applicant.full_name, a.title, a.department or '', affiliation_label(a)]).lower():
+            return False
+        if affiliation:
+            if affiliation.startswith('unit:'):
+                if not (is_direct_irb_affiliation(a.college) and (a.department or '') == affiliation[5:]):
+                    return False
+            elif a.college_id != affiliation:
+                return False
+        if status_filter and a.status != status_filter:
+            return False
+        if kind_filter and kinds.get(a.id, 'fresh') != kind_filter:
+            return False
+        return True
+
+    rows = [a for a in apps if matches(a)]
+    key_map = {
+        'reference': lambda a: a.reference_no or '',
+        'applicant': lambda a: a.applicant.full_name.lower(),
+        'affiliation': lambda a: affiliation_label(a).lower(),
+        'status': lambda a: a.status,
+        'updated_at': lambda a: a.updated_at or datetime.min,
+        'submitted_at': lambda a: (latest_submissions.get(a.id).submitted_at if latest_submissions.get(a.id) else a.submitted_at) or datetime.min,
+    }
+    rows.sort(key=key_map.get(sort_by, key_map['submitted_at']), reverse=direction != 'asc')
+
+    if request.query_params.get('format') == 'csv':
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(['S/N', 'Reference', 'Applicant', 'Applicant Type', 'College/Unit', 'Department/Unit', 'Research Title', 'Submission Type', 'Submitted', 'Status', 'Last Updated'])
+        for idx, a in enumerate(rows, start=1):
+            writer.writerow([idx, a.reference_no or '', a.applicant.full_name, a.applicant_type, affiliation_label(a), a.department or '', a.title, kinds.get(a.id, 'fresh'), (latest_submissions.get(a.id).submitted_at.isoformat() if latest_submissions.get(a.id) else (a.submitted_at.isoformat() if a.submitted_at else '')), a.status, a.updated_at.isoformat() if a.updated_at else ''])
+        return Response(output.getvalue(), media_type='text/csv', headers={'Content-Disposition': 'attachment; filename="ucc-irb-submission-register.csv"'})
+
+    statuses = sorted({a.status for a in apps})
+    return request.app.state.templates.TemplateResponse(
+        request, 'secretariat_register.html',
+        ctx(request, user, rows=rows, colleges=colleges, direct_units=direct_units, statuses=statuses,
+            kinds=kinds, latest_submissions=latest_submissions, filters={'q': q, 'affiliation': affiliation, 'status': status_filter, 'submission_kind': kind_filter, 'sort': sort_by, 'direction': direction})
+    )
 
 
 @router.post('/college/{app_id}/request-access')
@@ -1100,6 +1523,17 @@ def college_decision(
         transition(db, app, AppStatus.NOT_SCIENTIFICALLY_RECOMMENDED.value, user.id, comments or 'Not scientifically recommended')
     audit(db, user.id, 'college_scientific_committee_decision', app.id, decision)
     db.commit()
+    if decision in {'minor_revision', 'major_revision'} and gmail_configured():
+        try:
+            college_revision_request_email(
+                applicant_name=app.applicant.full_name, applicant_email=app.applicant.email,
+                reference_no=app.reference_no or '', research_title=app.title, college_name=app.college.name,
+                decision=decision.replace('_', ' ').title(), comments=comments.strip(),
+                application_url=f'{_base_url(request)}/applications/{app.id}'
+            )
+        except Exception as exc:
+            audit(db, user.id, 'college_revision_email_failed', app.id, str(exc)[:500])
+            db.commit()
     return RedirectResponse(f'/applications/{app.id}', status_code=303)
 
 
@@ -1454,6 +1888,7 @@ def _review_queue_data(db: Session, user: User, level: str):
     if level == 'college':
         require_roles(user, Role.COLLEGE_ADMIN.value)
         statuses = [
+            AppStatus.FORWARDED_TO_COLLEGE.value,
             AppStatus.AWAITING_COLLEGE_REVIEWER.value,
             AppStatus.COLLEGE_REVIEW.value,
             AppStatus.COLLEGE_REVISED.value,
@@ -1518,6 +1953,15 @@ def _review_queue_data(db: Session, user: User, level: str):
 
 def _render_review_queue(request: Request, db: Session, user: User, level: str):
     apps, reviewers, batches, counts, workloads, batch_stats = _review_queue_data(db, user, level)
+    kinds = latest_submission_kind_map(db, [a.id for a in apps])
+    fresh_apps = [a for a in apps if kinds.get(a.id, 'fresh') == 'fresh']
+    revised_apps = [a for a in apps if kinds.get(a.id) in {'college_revision', 'irb_revision'}]
+    batch_contacts = reviewer_contact_map_for_batches(db, batches)
+    saved_contacts = []
+    if level == 'college':
+        saved_contacts = db.scalars(select(ReviewerContact).where(
+            ReviewerContact.level == 'college', ReviewerContact.college_id == user.college_id, ReviewerContact.active == True
+        ).order_by(ReviewerContact.last_name, ReviewerContact.first_name)).all()
     return request.app.state.templates.TemplateResponse(
         request,
         'review_queue.html',
@@ -1526,8 +1970,13 @@ def _render_review_queue(request: Request, db: Session, user: User, level: str):
             user,
             level=level,
             apps=apps,
+            fresh_apps=fresh_apps,
+            revised_apps=revised_apps,
+            submission_kinds=kinds,
             reviewers=reviewers,
+            saved_contacts=saved_contacts,
             batches=batches,
+            batch_contacts=batch_contacts,
             assignment_counts=counts,
             reviewer_workload=workloads,
             batch_stats=batch_stats,
@@ -1561,8 +2010,13 @@ def _base_url(request: Request) -> str:
 def assign_review_batch(
     request: Request,
     level: str = Form(...),
-    reviewer_id: str = Form(...),
     application_ids: list[str] = Form(...),
+    reviewer_id: str = Form(''),
+    reviewer_title: str = Form(''),
+    reviewer_first_name: str = Form(''),
+    reviewer_last_name: str = Form(''),
+    reviewer_email: str = Form(''),
+    reviewer_phone: str = Form(''),
     assignment_type: str = Form('primary'),
     due_days: int = Form(REVIEW_DUE_DAYS),
     message: str = Form(''),
@@ -1572,9 +2026,16 @@ def assign_review_batch(
     if level not in {'college', 'irb'}:
         raise HTTPException(400, 'Invalid review level.')
     apps, reviewers, _, _, _, _ = _review_queue_data(db, user, level)
-    reviewer = next((r for r in reviewers if r.id == reviewer_id), None)
-    if not reviewer:
-        raise HTTPException(400, 'Select an active reviewer available to this review level.')
+    contact = None
+    if level == 'college':
+        contact, reviewer = get_or_create_reviewer_contact(
+            db, user, level='college', title=reviewer_title, first_name=reviewer_first_name,
+            last_name=reviewer_last_name, email=reviewer_email, phone=reviewer_phone
+        )
+    else:
+        reviewer = next((r for r in reviewers if r.id == reviewer_id), None)
+        if not reviewer:
+            raise HTTPException(400, 'Select an active IRB reviewer available to this review level.')
 
     ids = list(dict.fromkeys(application_ids))
     if not ids:
@@ -1642,15 +2103,19 @@ def assign_review_batch(
             batch.email_status = 'not_configured'
             delivery_message = 'Email is not configured. Copy the secure link shown below and send it to the reviewer through an approved institutional channel.'
         else:
+            delivery_name = f"{contact.title + ' ' if contact and contact.title else ''}{contact.first_name} {contact.last_name}".strip() if contact else reviewer.full_name
+            delivery_email = contact.email if contact else reviewer.email
+            assigning_office = user.college.name + ' Scientific Committee' if level == 'college' and user.college else 'Institutional Review Board Secretariat'
             review_assignment_email(
-                reviewer_name=reviewer.full_name,
-                reviewer_email=reviewer.email,
+                reviewer_name=delivery_name,
+                reviewer_email=delivery_email,
                 level=level,
                 count=len(selected),
                 secure_url=secure_url,
                 due_at=due_at,
                 link_expires_at=link_expires_at,
                 message=message.strip(),
+                assigning_office=assigning_office,
             )
             batch.email_status = 'sent'
             batch.sent_at = datetime.utcnow()
@@ -1699,7 +2164,7 @@ def _render_review_batch_detail(request: Request, db: Session, user: User, batch
     return request.app.state.templates.TemplateResponse(
         request,
         'review_batch_detail.html',
-        ctx(request, user, batch=batch, items=items, declarations=declarations, reports=reports, secure_url=secure_url, notice=notice, now=datetime.utcnow()),
+        ctx(request, user, batch=batch, review_contact=reviewer_contact_for_proxy(db, batch.reviewer_id), items=items, declarations=declarations, reports=reports, secure_url=secure_url, notice=notice, now=datetime.utcnow()),
     )
 
 
@@ -1726,15 +2191,20 @@ def resend_review_batch(request: Request, batch_id: str, db: Session = Depends(g
     batch.link_expires_at = datetime.utcnow() + timedelta(days=max(REVIEW_ASSIGNMENT_LINK_EXPIRY_DAYS, 7))
     secure_url = f'{_base_url(request)}/secure/reviews/{token}'
     try:
+        contact = reviewer_contact_for_proxy(db, batch.reviewer_id)
+        reviewer_name = (f"{contact.title + ' ' if contact and contact.title else ''}{contact.first_name} {contact.last_name}".strip() if contact else batch.reviewer.full_name)
+        reviewer_email = contact.email if contact else batch.reviewer.email
+        assigning_office = (user.college.name + ' Scientific Committee') if batch.level == 'college' and user.college else 'Institutional Review Board Secretariat'
         review_assignment_email(
-            reviewer_name=batch.reviewer.full_name,
-            reviewer_email=batch.reviewer.email,
+            reviewer_name=reviewer_name,
+            reviewer_email=reviewer_email,
             level=batch.level,
             count=len(batch.items),
             secure_url=secure_url,
             due_at=batch.due_at,
             link_expires_at=batch.link_expires_at,
             message=batch.message or '',
+            assigning_office=assigning_office,
         )
         batch.email_status = 'sent'
         batch.sent_at = datetime.utcnow()
@@ -1831,6 +2301,7 @@ def secure_review_workspace(request: Request, token: str, db: Session = Depends(
         {
             'request': request,
             'batch': batch,
+            'review_contact': reviewer_contact_for_proxy(db, batch.reviewer_id),
             'items': items,
             'declarations': declarations,
             'reports': reports,
