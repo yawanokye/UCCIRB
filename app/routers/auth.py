@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Form, Query, Request
+import logging
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -10,6 +11,7 @@ from ..services.auth import hash_password, password_needs_rehash, verify_passwor
 from ..security import (clear_login_failures, log_security_event, login_locked, superadmin_ip_allowed)
 
 router = APIRouter()
+logger = logging.getLogger("ucc_irb.auth")
 
 ADMIN_ROLES = {
     Role.IRB_SECRETARIAT.value,
@@ -130,7 +132,7 @@ def login(
 ):
     portal = normalise_portal(portal)
     email = email.lower().strip()
-    if login_locked(db, request, email):
+    if login_locked(db, request, email, include_ip=(portal != 'applicant')):
         log_security_event(db, request, 'login_blocked', email=email, detail=f'portal={portal}')
         return request.app.state.templates.TemplateResponse(
             request, 'login.html',
@@ -149,6 +151,7 @@ def login(
         )
 
     if portal == 'applicant' and user.role != Role.APPLICANT.value:
+        logger.warning('Login portal role mismatch portal=applicant role=%s user_id=%s', user.role, user.id)
         return request.app.state.templates.TemplateResponse(
             request,
             'login.html',
@@ -160,6 +163,7 @@ def login(
         )
 
     if portal == 'administrative' and user.role not in ADMIN_ROLES:
+        logger.warning('Login portal role mismatch portal=administrative role=%s user_id=%s', user.role, user.id)
         message = (
             'System Administrator accounts must use the System Administrator Portal.'
             if user.role == Role.SUPERADMIN.value
