@@ -297,7 +297,7 @@
     {% if report_documents.get(x.id) %}
       <div class="review-files"><strong>{% if user.id == app.applicant_id %}Review report available:{% else %}Submitted review files:{% endif %}</strong>
       {% for rf in report_documents[x.id] %}
-        {% if user.id != app.applicant_id or rf.document_kind == 'review_report' %}<a href="/review-reports/{{ rf.id }}/download">{% if user.id == app.applicant_id %}Download {{ 'Scientific' if x.level == 'college' else 'IRB' }} Review Report{% else %}{{ rf.document_kind.replace('_',' ').title() }} · {{ rf.original_name }}{% endif %}</a>{% endif %}
+        {% if user.id != app.applicant_id or rf.document_kind == 'review_report' %}{% if report_availability.get(rf.id) %}<a href="/review-reports/{{ rf.id }}/view" target="_blank">{% if user.id == app.applicant_id %}Open {{ 'Scientific' if x.level == 'college' else 'IRB' }} Review Report{% else %}Open {{ rf.document_kind.replace('_',' ').title() }} · {{ rf.original_name }}{% endif %}</a><small><a href="/review-reports/{{ rf.id }}/download">Download</a></small>{% else %}<span class="urgent">{{ rf.document_kind.replace('_',' ').title() }} file unavailable</span>{% if user.role == 'college_admin' and x.level == 'college' %}<form method="post" action="/review-assignments/{{ x.id }}/request-report-reupload" class="mini-action"><button class="btn secondary smallbtn" type="submit">Request reviewer re-upload</button></form>{% endif %}{% endif %}{% endif %}
       {% endfor %}
       </div>
     {% endif %}
@@ -307,7 +307,7 @@
 </section>
 {% endif %}
 
-{% if user.role == 'college_admin' and app.status == 'college_revised_submission_received' %}
+{% if user.role == 'college_admin' and (app.status == 'college_revised_submission_received' or (app.status == 'college_revision_required' and college_revision_ready)) %}
 <section class="card actioncard revision-disposition" id="revision-disposition">
   <div class="sectionhead"><div><span class="eyebrow">Revised submission received</span><h2>Decide whether the revision needs reviewer re-check</h2></div></div>
   <p>The applicant's revised documents have returned directly to the College Scientific Committee. Previous-round reviewers are attached below. Select the reviewer(s) only if the revision should be sent back for another scientific check. Otherwise, record an administrative review and proceed to the Committee decision.</p>
