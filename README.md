@@ -177,3 +177,39 @@ Official PDFs are packaged under `app/static/resources/` and are therefore deplo
 Before initial submission the portal now checks for a protocol or Composite Form, application letter, similarity report and applicant CV. Student applications additionally require supervisor approval, Head of Unit support and supervisor CV. If the Composite Form is not uploaded, a completed IRB checklist is also required. Study-specific consent, assent, records-access and data-collection instruments remain conditional and are checked according to the study.
 
 Build ID: `2026-08-10-applicant-resources-v10`
+
+## Phase 2 V11 — Secretariat receiving, College scientific workflow, register and reviewer emailing
+
+Build ID: `2026-08-10-secretariat-college-workflow-v11`
+
+This release changes the first-submission governance flow to:
+
+`Applicant → IRB Secretariat receipt/checklist → Mark complete → automatic forwarding to relevant College Scientific Committee → College reviewer assignment/revision cycle → College scientific recommendation → IRB final ethical review and approval`
+
+For applicants from other UCC academic/administrative units outside the five Scientific Committee Colleges, the complete application remains with the IRB Secretariat and proceeds to the direct IRB pathway.
+
+### New controls
+
+- **Automatic forwarding after Secretariat completeness:** no second College access-permission step is required after an application is marked administratively complete.
+- **College monitoring of first submissions:** the relevant College can see metadata while the application is still awaiting initial Secretariat screening. It can click **Request IRB Secretariat Attention** if the submission appears unattended. Documents remain locked at this stage.
+- **Persisted Secretariat document checklist:** every submitted file must be opened/reviewed and checked. The portal also shows the core required-document list. The Secretariat cannot mark an application complete until the core requirements are present and every submitted document has been verified.
+- **Submission Register:** `/secretariat/register` lists all submitted work and can filter/sort by Scientific Committee College, other UCC unit, submission type, status, applicant/reference, and dates. CSV export is included.
+- **Fresh and revised separation:** College dashboards and assignment queues show fresh submissions separately from revised submissions. Document history also separates fresh, College-revision and IRB-revision files.
+- **Direct College revision route:** once the first submission has passed Secretariat screening, College revision communication is between the College Scientific Committee and the applicant. A revised submission is routed directly back to the relevant College, without returning to the Secretariat. It goes back to IRB only after the College scientifically recommends it.
+- **Reviewer email workflow adapted from the Academic Submission Portal:** the College selects one or several applications, enters the reviewer title/name/email/phone, and sends one secure link. A reviewer portal account is not required. Each assigned application remains a separate work item with its own conflict declaration, package download and review report submission.
+- **Applicant/reviewer email collision protection:** a person may have an applicant account using the same email later used for review. Reviewer contacts are stored separately and mapped to an internal non-login proxy, so the applicant account is not converted or overwritten.
+- **Legacy V10 state repair:** existing records in the old visible/access-request states are migrated into the V11 automatic-forwarding College queue at startup, and their documents are activated for the College.
+
+### Existing Gmail environment variables
+
+The same Gmail OAuth settings continue to deliver reviewer assignments and College/applicant revision notifications:
+
+```env
+GMAIL_CLIENT_ID=...
+GMAIL_CLIENT_SECRET=...
+GMAIL_REFRESH_TOKEN=...
+GMAIL_SENDER_EMAIL=...
+PUBLIC_BASE_URL=https://ucc-irb-portal.onrender.com
+```
+
+No additional environment variable is required for V11.
