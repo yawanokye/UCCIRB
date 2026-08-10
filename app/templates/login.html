@@ -17,6 +17,7 @@
   {% if error %}<div class="alert danger">{{ error }}</div>{% endif %}
 
   <form method="post" action="{% if portal == 'system_admin' %}/system-admin/login{% else %}/login{% endif %}">
+    <input type="hidden" name="csrf_token" value="{{ request.session.get('csrf_token', '') }}">
     {% if portal != 'system_admin' %}<input type="hidden" name="portal" value="{{ portal }}">{% endif %}
     <label>{% if portal in ['administrative','system_admin'] %}Institutional email{% else %}Email address{% endif %}<input type="email" name="email" autocomplete="username" required></label>
     <label>Password<input type="password" name="password" autocomplete="current-password" required></label>

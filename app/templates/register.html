@@ -9,6 +9,7 @@
   {% if error %}<div class="alert danger">{{ error }}</div>{% endif %}
 
   <form method="post" action="/register">
+    <input type="hidden" name="csrf_token" value="{{ request.session.get('csrf_token', '') }}">
     <label>Full name<input type="text" name="full_name" autocomplete="name" required></label>
     <label>Email address<input type="email" name="email" autocomplete="email" required></label>
     <label>Primary UCC affiliation <span class="optional">optional at registration</span>
