@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: ucc-irb-portal
+    runtime: docker
+    plan: starter
+    healthCheckPath: /healthz
+    envVars:
+      - key: APP_NAME
+        value: UCC IRB Ethical Clearance Portal
+      - key: SECRET_KEY
+        generateValue: true
+      - key: SESSION_HTTPS_ONLY
+        value: "true"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ucc-irb-db
+          property: connectionString
+      - key: STORAGE_DIR
+        value: /app/storage
+      - key: PUBLIC_BASE_URL
+        value: https://ucc-irb-portal.onrender.com
+      - key: REVIEW_DUE_DAYS
+        value: "14"
+      - key: CLEARANCE_VALIDITY_DAYS
+        value: "365"
+      - key: MAX_UPLOAD_MB
+        value: "25"
+      - key: BOOTSTRAP_ADMIN_EMAIL
+        sync: false
+      - key: BOOTSTRAP_ADMIN_NAME
+        value: System Administrator
+      - key: BOOTSTRAP_ADMIN_PASSWORD
+        sync: false
+
+databases:
+  - name: ucc-irb-db
+    plan: starter
