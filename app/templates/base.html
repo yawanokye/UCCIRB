@@ -5,14 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#1F2056">
   <meta name="csrf-token" content="{{ request.session.get('csrf_token', '') }}">
-  <title>{% block title %}UCC Ethics Portal{% endblock %}</title>
+  <title>{% block title %}UCC IRB Ethical Clearance Portal{% endblock %}</title>
   <link rel="icon" type="image/png" href="/static/img/ucc-brand.png">
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
 <header class="ucc-header">
   <div class="ucc-header-inner">
-    <a class="ucc-brand-link" href="/" aria-label="University of Cape Coast Ethics Portal home">
+    <a class="ucc-brand-link" href="/" aria-label="UCC IRB Ethical Clearance Portal home">
       <img src="/static/img/ucc-brand.png" class="ucc-brand-image" alt="University of Cape Coast">
     </a>
     {% if user %}
@@ -28,7 +28,7 @@
 {% if not user %}
 <nav class="public-nav">
   <div class="public-nav-inner">
-    <a class="public-home-link" href="/">Ethical Clearance Portal</a>
+    <a class="public-home-link" href="/">UCC IRB Ethical Clearance Portal</a>
     <div>
       <a href="/register">Apply</a>
       <a href="/login?portal=applicant">Applicant Login</a>

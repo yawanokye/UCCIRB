@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% block title %}New Application · UCC Ethics Portal{% endblock %}
+{% block title %}New Application · UCC IRB Ethical Clearance Portal{% endblock %}
 {% block content %}
 <div class="pagehead">
   <div><span class="eyebrow">New application</span><h1>Research information</h1><p>Create the application record first, then upload the required documents before submitting to the IRB Secretariat.</p></div>
@@ -8,13 +8,10 @@
   <div><strong>Have you prepared your application package?</strong><span>Check the required documents and download the UCC-IRB forms before you continue.</span></div>
   <div><a href="/applicant-guide#required-documents">Document checklist</a><a href="/applicant-guide#resources">Forms & templates</a></div>
 </div>
-<div class="routing-tip card">
-  <strong>Choose your UCC affiliation carefully.</strong>
-  <p>The five listed Colleges route through their Scientific Committees. If your UCC academic or administrative unit is not under one of those Colleges, choose <strong>Other UCC Academic/Administrative Unit</strong>. That application will be handled directly by the IRB Secretariat after screening.</p>
-</div>
+
 <form method="post" class="card formgrid" id="new-application-form">
   <label class="wide">Research title<input name="title" required></label>
-  <label class="wide">UCC affiliation / review pathway
+  <label class="wide">UCC affiliation
     <select name="college_id" id="affiliation-select" required>
       <option value="">Select your affiliation</option>
       {% for c in colleges %}
@@ -26,35 +23,19 @@
   <label id="unit-field">Department / Unit / Directorate<input name="department" id="department-input" placeholder="e.g. Department, Directorate, School or Centre"></label>
   <label>Programme <span class="optional">where applicable</span><input name="programme"></label>
   <label class="wide">Brief study summary<textarea name="study_summary" rows="5"></textarea></label>
-  <div class="wide pathway-preview" id="pathway-preview" aria-live="polite">Select your UCC affiliation to see the review pathway.</div>
   <div class="wide"><button class="btn">Create application</button></div>
 </form>
 <script>
 (() => {
   const select = document.getElementById('affiliation-select');
   const department = document.getElementById('department-input');
-  const preview = document.getElementById('pathway-preview');
   const directCode = '{{ direct_irb_code }}';
   const update = () => {
     const option = select.options[select.selectedIndex];
     const code = option ? option.dataset.code : '';
-    if (!code) {
-      preview.textContent = 'Select your UCC affiliation to see the review pathway.';
-      preview.className = 'wide pathway-preview';
-      department.required = false;
-      return;
-    }
-    if (code === directCode) {
-      preview.innerHTML = '<strong>Direct IRB Secretariat pathway:</strong> after administrative screening, this application will not go to a College Scientific Committee. It will remain with the Secretariat for IRB review classification.';
-      preview.className = 'wide pathway-preview direct';
-      department.required = true;
-      department.placeholder = 'Enter the exact UCC academic or administrative unit';
-    } else {
-      preview.innerHTML = '<strong>College Scientific Committee pathway:</strong> after Secretariat screening, the relevant College may request review access. Documents remain locked until the Secretariat grants permission.';
-      preview.className = 'wide pathway-preview college';
-      department.required = false;
-      department.placeholder = 'Department / School / Faculty where applicable';
-    }
+    const direct = code === directCode;
+    department.required = direct;
+    department.placeholder = direct ? 'Enter the exact UCC academic or administrative unit' : 'Department / School / Faculty where applicable';
   };
   select.addEventListener('change', update); update();
 })();

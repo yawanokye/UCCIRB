@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% block title %}Create Applicant Account · UCC Ethics Portal{% endblock %}
+{% block title %}Create Applicant Account · UCC IRB Ethical Clearance Portal{% endblock %}
 {% block content %}
 <div class="authcard portal-authcard registration-card">
   <span class="eyebrow">Applicant registration</span>
@@ -17,11 +17,10 @@
         <option value="">Select later in your application</option>
         {% for college in colleges %}<option value="{{ college.id }}">{{ college.name }}</option>{% endfor %}
       </select>
-      <span class="form-help">Only five Colleges have Scientific Committees. Applicants from other UCC units can select the direct IRB Secretariat option.</span>
     </label>
-    <label>Password<input type="password" name="password" autocomplete="new-password" minlength="8" required></label>
-    <label>Confirm password<input type="password" name="confirm_password" autocomplete="new-password" minlength="8" required></label>
-    <p class="hint">Use at least 8 characters with at least one letter and one number.</p>
+    <label>Password<input type="password" name="password" autocomplete="new-password" minlength="10" required></label>
+    <label>Confirm password<input type="password" name="confirm_password" autocomplete="new-password" minlength="10" required></label>
+    <p class="hint">Use at least 10 characters and at least three of these: lowercase letters, uppercase letters, numbers and symbols.</p>
     <button class="btn full" type="submit">Create Account & Start Application</button>
   </form>
   <div class="portal-switch"><a href="/login?portal=applicant">Already registered? Sign in</a></div>

@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% block title %}{{ batch.reference }} · Review Assignment · UCC Ethics Portal{% endblock %}
+{% block title %}{{ batch.reference }} · Review Assignment · UCC IRB Ethical Clearance Portal{% endblock %}
 {% block content %}
 <div class="pagehead"><div><span class="eyebrow">Secure reviewer assignment</span><h1>{{ batch.reference }}</h1><p>{{ 'College Scientific Review' if batch.level == 'college' else 'IRB Ethical Review' }} · {% if review_contact %}{{ review_contact.title or '' }} {{ review_contact.first_name }} {{ review_contact.last_name }} · {{ review_contact.email }}{% else %}{{ batch.reviewer.full_name }} · {{ batch.reviewer.email }}{% endif %}</p></div><a class="btn secondary" href="{{ '/college/review-queue' if batch.level == 'college' else '/irb/review-queue' }}">Back to Review Queue</a></div>
 {% if notice %}<div class="alert {% if batch.email_status == 'sent' %}success{% else %}warning{% endif %}">{{ notice }}</div>{% endif %}

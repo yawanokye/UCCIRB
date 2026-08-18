@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% block title %}{{ app.reference_no or 'Draft' }} · UCC Ethics Portal{% endblock %}
+{% block title %}{{ app.reference_no or 'Draft' }} · UCC IRB Ethical Clearance Portal{% endblock %}
 {% block content %}
 <div class="pagehead">
   <div>
@@ -7,41 +7,24 @@
     <h1>{{ app.title }}</h1>
     <p>{{ app.applicant.full_name }} · {% if is_direct_irb %}{{ app.department or 'Other UCC academic/administrative unit' }}{% else %}{{ app.college.name }} · {{ app.department or 'Department not stated' }}{% endif %}</p>
   </div>
-  <span class="status big {{ app.status }}">{{ app.status.replace('_',' ').title() }}</span>
+  <span class="status big {{ app.status }}">{{ status_label(app.status) }}</span>
 </div>
 
-<div class="grid2">
-  <section class="card">
-    <h2>Application record</h2>
+{% if required_message %}<div class="alert danger prerequisite-alert" id="prerequisite-alert"><strong>Required before you continue:</strong> {{ required_message }}</div>{% endif %}
+
+<section class="card application-record-card">
+  <h2>Application record</h2>
     <dl>
       <dt>Applicant type</dt><dd>{{ app.applicant_type }}</dd>
       <dt>Programme</dt><dd>{{ app.programme or '—' }}</dd>
       <dt>{% if is_direct_irb %}UCC Unit{% else %}Department{% endif %}</dt><dd>{{ app.department or '—' }}</dd>
-      <dt>Review pathway</dt><dd>{% if uses_college_scientific_review %}{{ app.college.name }} Scientific Committee → IRB{% else %}Direct IRB Secretariat pathway{% endif %}</dd>
       <dt>Study summary</dt><dd>{{ app.study_summary or '—' }}</dd>
       <dt>Submitted</dt><dd>{{ app.submitted_at.strftime('%d %b %Y %H:%M') if app.submitted_at else 'Not submitted' }}</dd>
     </dl>
-  </section>
-  <section class="card">
-    <h2>Access and routing</h2>
-    {% if is_direct_irb %}
-      <div class="route-state direct"><strong>Direct IRB Secretariat pathway.</strong> This application does not require a College Scientific Committee review.</div>
-    {% elif uses_college_scientific_review %}
-      <div class="route-state college"><strong>College Scientific Committee pathway.</strong> The College can monitor the first submission while it is with the Secretariat. Once the Secretariat marks it complete, the documents are forwarded automatically to the Scientific Committee.</div>
-    {% endif %}
-    {% if can_docs %}
-      <div class="access granted">Document access is active for your role.</div>
-    {% else %}
-      <div class="access locked">Research documents are locked. Only authorised metadata is visible.</div>
-    {% endif %}
-    {% if classifications %}
-      <p class="hint"><strong>Latest IRB classification:</strong> {{ classifications[0].classification.replace('_',' ').title() }}</p>
-    {% endif %}
-  </section>
-</div>
+</section>
 
 {% if user.id == app.applicant_id and app.status in ['draft','returned_to_applicant_admin','college_revision_required','irb_revision_required'] %}
-<section class="card actioncard">
+<section class="card actioncard {% if required_target in ['documents','document-upload'] %}required-highlight{% endif %}" id="document-upload">
   <h2>{% if app.status in ['college_revision_required','irb_revision_required'] %}Upload revised documents{% else %}Upload supporting documents{% endif %}</h2>
   {% if app.status == 'returned_to_applicant_admin' and app.secretariat_note %}<div class="alert warning"><strong>Secretariat request:</strong> {{ app.secretariat_note }}</div>{% endif %}
   {% if app.status == 'returned_to_applicant_admin' and screening_checks %}
@@ -91,14 +74,14 @@
       {% if app.status in ['draft','returned_to_applicant_admin'] %}
         <span class="eyebrow">Required documents</span><h3>Application checklist</h3>
         <p>Each item turns green after a matching document is successfully uploaded.</p>
-        <ul>{% for label,present in required_document_rows %}<li class="{{ 'done' if present else 'pending' }}"><span>{{ '✓' if present else '○' }}</span><b>{{ label }}</b></li>{% endfor %}</ul>
+        <ul>{% for label,present in required_document_rows %}<li class="{{ 'done' if present else ('required-missing' if required_target in ['documents','document-upload'] else 'pending') }}"><span>{{ '✓' if present else '!' if required_target in ['documents','document-upload'] else '○' }}</span><b>{{ label }}</b>{% if not present and required_target in ['documents','document-upload'] %}<small>Required</small>{% endif %}</li>{% endfor %}</ul>
         <div class="conditional-docs"><strong>When applicable</strong><small>Consent/assent forms, records-keeper consent, data collection instruments and recruitment materials.</small></div>
       {% elif app.status == 'college_revision_required' %}
         <span class="eyebrow">Revision checklist</span><h3>College revision</h3>
-        {% set college_response_ready = college_revision_documents|selectattr('document_type','equalto','Response to College Review')|list %}{% set college_affected_ready = college_revision_documents|rejectattr('document_type','equalto','Response to College Review')|list %}<ul><li class="{{ 'done' if college_response_ready else 'pending' }}"><span>{{ '✓' if college_response_ready else '○' }}</span><b>Response to College Review</b></li><li class="{{ 'done' if college_affected_ready else 'pending' }}"><span>{{ '✓' if college_affected_ready else '○' }}</span><b>Revised protocol / affected documents</b></li></ul>
+        {% set college_response_ready = college_revision_documents|selectattr('document_type','equalto','Response to College Review')|list %}{% set college_affected_ready = college_revision_documents|rejectattr('document_type','equalto','Response to College Review')|list %}<ul><li class="{{ 'done' if college_response_ready else ('required-missing' if required_target == 'document-upload' else 'pending') }}"><span>{{ '✓' if college_response_ready else '○' }}</span><b>Response to College Review</b></li><li class="{{ 'done' if college_affected_ready else 'pending' }}"><span>{{ '✓' if college_affected_ready else '○' }}</span><b>Revised protocol / affected documents</b></li></ul>
       {% else %}
         <span class="eyebrow">Revision checklist</span><h3>IRB revision</h3>
-        {% set irb_response_ready = irb_revision_documents|selectattr('document_type','equalto','Response to IRB Review')|list %}{% set irb_affected_ready = irb_revision_documents|rejectattr('document_type','equalto','Response to IRB Review')|list %}<ul><li class="{{ 'done' if irb_response_ready else 'pending' }}"><span>{{ '✓' if irb_response_ready else '○' }}</span><b>Response to IRB Review</b></li><li class="{{ 'done' if irb_affected_ready else 'pending' }}"><span>{{ '✓' if irb_affected_ready else '○' }}</span><b>Revised protocol / affected documents</b></li></ul>
+        {% set irb_response_ready = irb_revision_documents|selectattr('document_type','equalto','Response to IRB Review')|list %}{% set irb_affected_ready = irb_revision_documents|rejectattr('document_type','equalto','Response to IRB Review')|list %}<ul><li class="{{ 'done' if irb_response_ready else ('required-missing' if required_target == 'document-upload' else 'pending') }}"><span>{{ '✓' if irb_response_ready else '○' }}</span><b>Response to IRB Review</b></li><li class="{{ 'done' if irb_affected_ready else 'pending' }}"><span>{{ '✓' if irb_affected_ready else '○' }}</span><b>Revised protocol / affected documents</b></li></ul>
       {% endif %}
       <div id="selectionHint" class="selection-hint">Choose a document type and file to continue.</div>
     </aside>
@@ -121,14 +104,14 @@
 {% endif %}
 
 {% if can_docs %}
-<section class="card">
+<section class="card {% if required_target == 'documents' %}required-highlight{% endif %}" id="documents">
   <div class="sectionhead"><div><span class="eyebrow">Document history</span><h2>Fresh submission documents</h2></div></div>
-  <table><thead><tr><th>Document type</th><th>File</th><th>Version</th><th>Uploaded</th></tr></thead><tbody>
-  {% for d in fresh_documents %}<tr><td>{{ d.document_type }}</td><td><a href="/documents/{{ d.id }}/view">{{ d.original_name }}</a><br><small><a href="/documents/{{ d.id }}/download">Download original</a></small></td><td>v{{ d.version }}</td><td>{{ d.uploaded_at.strftime('%d %b %Y %H:%M') }}</td></tr>{% else %}<tr><td colspan="4" class="empty">No fresh-submission documents are available.</td></tr>{% endfor %}
+  <table><thead><tr><th>Document type</th><th>File</th><th>Version</th><th>Uploaded</th>{% if user.id == app.applicant_id %}<th>Action</th>{% endif %}</tr></thead><tbody>
+  {% for d in fresh_documents %}<tr><td>{{ d.document_type }}</td><td><a href="/documents/{{ d.id }}/view">{{ d.original_name }}</a><br><small><a href="/documents/{{ d.id }}/download">Download original</a></small></td><td>v{{ d.version }}</td><td>{{ d.uploaded_at.strftime('%d %b %Y %H:%M') }}</td>{% if user.id == app.applicant_id %}<td>{% if d.id in can_remove_document_ids %}<form method="post" action="/applications/{{ app.id }}/documents/{{ d.id }}/remove" onsubmit="return confirm('Remove this document from the current application package?');"><button class="btn dangerbtn smallbtn" type="submit">Remove</button></form>{% else %}<span class="locked-record">Locked record</span>{% endif %}</td>{% endif %}</tr>{% else %}<tr><td colspan="{{ 5 if user.id == app.applicant_id else 4 }}" class="empty">No fresh-submission documents are available.</td></tr>{% endfor %}
   </tbody></table>
 </section>
-{% if college_revision_documents %}<section class="card revision-card"><div class="sectionhead"><div><span class="eyebrow">College revisions</span><h2>Revised documents submitted directly to the College</h2></div></div><table><thead><tr><th>Round</th><th>Document type</th><th>File</th><th>Version</th><th>Uploaded</th></tr></thead><tbody>{% for d in college_revision_documents %}{% set m=document_stages.get(d.id) %}<tr><td>Revision {{ m.round_no if m else '—' }}</td><td>{{ d.document_type }}</td><td><a href="/documents/{{ d.id }}/view">{{ d.original_name }}</a><br><small><a href="/documents/{{ d.id }}/download">Download original</a></small></td><td>v{{ d.version }}</td><td>{{ d.uploaded_at.strftime('%d %b %Y %H:%M') }}</td></tr>{% endfor %}</tbody></table></section>{% endif %}
-{% if irb_revision_documents %}<section class="card revision-card"><div class="sectionhead"><div><span class="eyebrow">IRB revisions</span><h2>Revised documents for IRB review</h2></div></div><table><thead><tr><th>Round</th><th>Document type</th><th>File</th><th>Version</th><th>Uploaded</th></tr></thead><tbody>{% for d in irb_revision_documents %}{% set m=document_stages.get(d.id) %}<tr><td>Revision {{ m.round_no if m else '—' }}</td><td>{{ d.document_type }}</td><td><a href="/documents/{{ d.id }}/view">{{ d.original_name }}</a><br><small><a href="/documents/{{ d.id }}/download">Download original</a></small></td><td>v{{ d.version }}</td><td>{{ d.uploaded_at.strftime('%d %b %Y %H:%M') }}</td></tr>{% endfor %}</tbody></table></section>{% endif %}
+{% if college_revision_documents %}<section class="card revision-card"><div class="sectionhead"><div><span class="eyebrow">College revisions</span><h2>Revised documents submitted directly to the College</h2></div></div><table><thead><tr><th>Round</th><th>Document type</th><th>File</th><th>Version</th><th>Uploaded</th>{% if user.id == app.applicant_id %}<th>Action</th>{% endif %}</tr></thead><tbody>{% for d in college_revision_documents %}{% set m=document_stages.get(d.id) %}<tr><td>Revision {{ m.round_no if m else '—' }}</td><td>{{ d.document_type }}</td><td><a href="/documents/{{ d.id }}/view">{{ d.original_name }}</a><br><small><a href="/documents/{{ d.id }}/download">Download original</a></small></td><td>v{{ d.version }}</td><td>{{ d.uploaded_at.strftime('%d %b %Y %H:%M') }}</td>{% if user.id == app.applicant_id %}<td>{% if d.id in can_remove_document_ids %}<form method="post" action="/applications/{{ app.id }}/documents/{{ d.id }}/remove" onsubmit="return confirm('Remove this document from the current revision package?');"><button class="btn dangerbtn smallbtn" type="submit">Remove</button></form>{% else %}<span class="locked-record">Locked record</span>{% endif %}</td>{% endif %}</tr>{% endfor %}</tbody></table></section>{% endif %}
+{% if irb_revision_documents %}<section class="card revision-card"><div class="sectionhead"><div><span class="eyebrow">IRB revisions</span><h2>Revised documents for IRB review</h2></div></div><table><thead><tr><th>Round</th><th>Document type</th><th>File</th><th>Version</th><th>Uploaded</th>{% if user.id == app.applicant_id %}<th>Action</th>{% endif %}</tr></thead><tbody>{% for d in irb_revision_documents %}{% set m=document_stages.get(d.id) %}<tr><td>Revision {{ m.round_no if m else '—' }}</td><td>{{ d.document_type }}</td><td><a href="/documents/{{ d.id }}/view">{{ d.original_name }}</a><br><small><a href="/documents/{{ d.id }}/download">Download original</a></small></td><td>v{{ d.version }}</td><td>{{ d.uploaded_at.strftime('%d %b %Y %H:%M') }}</td>{% if user.id == app.applicant_id %}<td>{% if d.id in can_remove_document_ids %}<form method="post" action="/applications/{{ app.id }}/documents/{{ d.id }}/remove" onsubmit="return confirm('Remove this document from the current revision package?');"><button class="btn dangerbtn smallbtn" type="submit">Remove</button></form>{% else %}<span class="locked-record">Locked record</span>{% endif %}</td>{% endif %}</tr>{% endfor %}</tbody></table></section>{% endif %}
 {% endif %}
 
 {% if user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status in ['submitted_to_irb_secretariat','irb_secretariat_screening'] %}
@@ -190,11 +173,7 @@
     </div>
   </form>
 
-  <div class="screening-final-decision">
-    <div class="screening-route-box">
-      <span class="eyebrow">Next route</span>
-      {% if uses_college_scientific_review %}<strong>{{ app.college.name }} Scientific Committee</strong><p>When complete, the application and activated documents are forwarded automatically to the College.</p>{% else %}<strong>Direct IRB review pathway</strong><p>This application remains with the IRB Secretariat for IRB review classification.</p>{% endif %}
-    </div>
+  <div class="screening-final-decision single-decision {% if required_target == 'secretariat-screening' %}required-highlight{% endif %}" id="secretariat-screening">
     <form method="post" action="/secretariat/{{ app.id }}/screen" class="screening-decision-form">
       <label>Overall screening note <span class="optional">optional if all documents are suitable</span><textarea name="note" rows="3" placeholder="Add a general instruction if returning the application, or an optional internal screening note."></textarea></label>
       <div class="decision-actions"><button class="btn" name="outcome" value="complete">Mark Complete & {% if uses_college_scientific_review %}Forward to College{% else %}Proceed to IRB{% endif %}</button><button class="btn dangerbtn" name="outcome" value="return">Return First Submission to Applicant</button></div>
@@ -226,7 +205,7 @@
 {% endif %}
 
 {% if user.role == 'college_admin' and app.status in ['forwarded_to_college_scientific_committee','awaiting_college_reviewer_assignment','under_college_scientific_review','college_revised_submission_received'] %}
-<section class="card actioncard">
+<section class="card actioncard {% if required_target == 'review-prerequisite' %}required-highlight{% endif %}" id="review-prerequisite">
   <h2>College scientific reviewer assignment</h2>
   <p>Use the College review queue to select this application together with other fresh or revised work. Enter the reviewer details and email, then send one secure assignment link containing the required document package for each selected applicant.</p>
   <a class="btn" href="/college/review-queue">Email Documents for Review</a>
@@ -249,6 +228,7 @@
     {% elif declaration.declaration == 'clear' %}
     <section class="card actioncard navyline">
       <h2>{% if x.level == 'college' %}Submit scientific review{% else %}Submit IRB ethical review{% endif %}</h2>
+      <div class="reviewer-form-note"><strong>Reviewer report:</strong> <a href="/reviewer-assessment-form" download>Download the UCC-IRB Research Ethics Reviewer Assessment Form</a>, complete it, then upload the signed/completed report below.</div>
       {% if assignment_meta.get(x.id) and assignment_meta[x.id].due_at %}<p class="hint">Review due: <strong>{{ assignment_meta[x.id].due_at.strftime('%d %b %Y %H:%M') }}</strong>{% if assignment_meta[x.id].due_at < now %} <span class="overdue">Overdue</span>{% endif %}</p>{% endif %}
       <form method="post" action="/review/{{ x.id }}/submit" enctype="multipart/form-data">
         <label>Recommendation
@@ -308,7 +288,7 @@
 {% endif %}
 
 {% if user.role == 'college_admin' and (app.status == 'college_revised_submission_received' or (app.status == 'college_revision_required' and college_revision_ready)) %}
-<section class="card actioncard revision-disposition" id="revision-disposition">
+<section class="card actioncard revision-disposition {% if required_target == 'review-prerequisite' %}required-highlight{% endif %}" id="revision-disposition">
   <div class="sectionhead"><div><span class="eyebrow">Revised submission received</span><h2>Decide whether the revision needs reviewer re-check</h2></div></div>
   <p>The applicant's revised documents have returned directly to the College Scientific Committee. Previous-round reviewers are attached below. Select the reviewer(s) only if the revision should be sent back for another scientific check. Otherwise, record an administrative review and proceed to the Committee decision.</p>
   <form method="post" action="/college/{{ app.id }}/revision-disposition" id="revisionDispositionForm">
@@ -331,7 +311,7 @@
 {% endif %}
 
 {% if user.role == 'college_admin' and app.status == 'awaiting_college_decision' %}
-<section class="card actioncard">
+<section class="card actioncard {% if required_target == 'review-prerequisite' %}required-highlight{% endif %}" id="review-prerequisite">
   <h2>College Scientific Committee decision</h2>
   <form method="post" action="/college/{{ app.id }}/decision">
     <div class="formgrid">
@@ -353,7 +333,7 @@
 
 {% if user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status in ['returned_to_irb_secretariat','direct_irb_secretariat_pathway','irb_review_classification'] %}
 {% if is_direct_irb and app.status == 'direct_irb_secretariat_pathway' %}<div class="alert info direct-path-alert"><strong>No College Scientific Committee applies.</strong> The Secretariat can now classify this application for IRB ethical review.</div>{% endif %}
-<section class="card actioncard navyline">
+<section class="card actioncard navyline {% if required_target == 'irb-prerequisite' %}required-highlight{% endif %}" id="irb-prerequisite">
   <h2>IRB review classification</h2>
   <form method="post" action="/irb/{{ app.id }}/classify">
     <label>Review pathway<select name="classification" required><option value="exempt">Exempt Determination</option><option value="expedited">Expedited Review</option><option value="full_board">Full Board Review</option></select></label>
@@ -389,7 +369,7 @@
 {% endif %}
 
 {% if user.role in ['irb_chair','superadmin'] and app.status in ['awaiting_final_irb_decision','scheduled_for_full_board_review','deferred'] %}
-<section class="card actioncard redline">
+<section class="card actioncard redline {% if required_target == 'final-decision' %}required-highlight{% endif %}" id="final-decision">
   <h2>Authorised final IRB decision</h2>
   <p>The final decision is restricted to the IRB Chairperson or an authorised system-level authority.</p>
   <form method="post" action="/irb/{{ app.id }}/decision">
@@ -457,7 +437,7 @@
 <section class="card">
   <h2>Application workflow history</h2>
   <ol class="timeline">
-    {% for h in status_history %}<li><strong>{{ h.to_status.replace('_',' ').title() }}</strong><small>{{ h.created_at.strftime('%d %b %Y %H:%M') }}</small>{% set visible_note = public_history_notes.get(h.id) if user.id == app.applicant_id else h.note %}{% if visible_note %}<div>{{ visible_note }}</div>{% endif %}</li>{% endfor %}
+    {% for h in status_history %}<li><strong>{{ status_label(h.to_status) }}</strong><small>{{ h.created_at.strftime('%d %b %Y %H:%M') }}</small>{% set visible_note = public_history_notes.get(h.id) if user.id == app.applicant_id else h.note %}{% if visible_note %}<div>{{ visible_note }}</div>{% endif %}</li>{% endfor %}
   </ol>
 </section>
 {% endif %}

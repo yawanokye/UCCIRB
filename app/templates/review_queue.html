@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% block title %}{{ 'College Scientific' if level == 'college' else 'IRB Ethical' }} Review Queue · UCC Ethics Portal{% endblock %}
+{% block title %}{{ 'College Scientific' if level == 'college' else 'IRB Ethical' }} Review Queue · UCC IRB Ethical Clearance Portal{% endblock %}
 {% block content %}
 <div class="pagehead">
   <div><span class="eyebrow">{{ 'College Scientific Committee' if level == 'college' else 'IRB Secretariat' }}</span>
@@ -36,7 +36,7 @@
           <td>{% if a.college.code == 'IRB-DIRECT' %}{{ a.department or 'Other UCC Unit' }}{% else %}{{ a.college.name }}{% endif %}</td>
           <td>{{ a.title }}</td>
           {% if show_previous and level == 'college' %}<td>{% set prevs=previous_reviewers_by_app.get(a.id,[]) %}{% for r in prevs %}<a class="reviewer-chip" href="/applications/{{ a.id }}#revision-disposition">{{ r.name }}</a>{% else %}<span class="muted">None recorded</span>{% endfor %}</td>{% endif %}
-          <td>{% if level == 'college' and a.status == 'college_revision_required' and a.id in revision_ready_ids %}<span class="status college_revised_submission_received">Revision Package Received</span>{% else %}<span class="status {{ a.status }}">{{ a.status.replace('_',' ').title() }}</span>{% endif %}</td>
+          <td>{% if level == 'college' and a.status == 'college_revision_required' and a.id in revision_ready_ids %}<span class="status college_revised_submission_received">Revision Package Received</span>{% else %}<span class="status {{ a.status }}">{{ status_label(a.status) }}</span>{% endif %}</td>
           <td><span class="assignment-count count-{{ assignment_counts[a.id] if assignment_counts[a.id] < 2 else 2 }}">{{ assignment_counts[a.id] }}/{{ max_reviewers }}</span>{% if full %}<br><span class="urgent">Limit reached</span>{% endif %}</td>
           {% if show_previous and level == 'college' %}<td>{% if a.status == 'college_revised_submission_received' or a.id in revision_ready_ids %}<a class="btn secondary smallbtn" href="/applications/{{ a.id }}#revision-disposition">Previous reviewer / Admin review</a>{% else %}<a class="btn secondary smallbtn" href="/applications/{{ a.id }}">Open revision</a>{% endif %}</td>{% endif %}
         </tr>
@@ -51,6 +51,7 @@
   <div class="review-material-picker">
     <h2 class="assignment-step">2. Select documents to send for review</h2>
     <p>Tick the items the reviewer should check. For each selected application, the latest available version of the ticked document type is added to the secure review package and, where email size permits, attached directly to the review invitation email.</p>
+    <div class="reviewer-form-note"><strong>Reviewer report template:</strong> the UCC-IRB Research Ethics Reviewer Assessment Form is automatically attached to the reviewer email and included in every secure review package.</div>
     <div class="material-check-grid">
       {% for dtype in review_material_options %}
       <label class="material-check"><input type="checkbox" name="document_types" value="{{ dtype }}" {% if dtype in default_review_materials %}checked{% endif %}><span>{{ dtype }}</span></label>
