@@ -1,3 +1,26 @@
+# UCC IRB Ethical Clearance Portal — Phase 2 V19
+
+Build ID: `2026-08-18-applicant-controls-prerequisites-v19`
+
+V19 improves the applicant and reviewer experience while keeping routing controls internal.
+
+## V19 changes
+
+- Applicants can remove a wrongly attached document while the item is still editable. Submitted historical records remain locked, and replacement versions can be uploaded when a submitted item is already part of a review record.
+- Applicant-facing return states now say **Returned to Applicant by IRB Secretariat**, **Returned to Applicant by College Scientific Committee**, or **Returned to Applicant by IRB**.
+- Public/applicant screens no longer expose the old Access and Routing panel or the direct-routing label. The Other UCC option is displayed simply as **Other UCC Academic/Administrative Unit**. Internal officers still retain the operational routing controls required to process applications.
+- Expired authenticated sessions are redirected to the appropriate login page with an expiry notice. A user who was simply not signed in is sent to the appropriate login page without a false expiry message.
+- Core workflow prerequisites redirect the user to the required step instead of leaving the user on a raw error. The required section and missing checklist items are highlighted in red.
+- The public title is **UCC IRB Ethical Clearance Portal**.
+- The **UCC-IRB Research Ethics Reviewer Assessment Form** is built into review assignment. It is attached to reviewer invitation email where email delivery is configured, added to secure review packages, and available to authorised reviewers through protected download routes. It is not exposed as a public static resource.
+- The reviewer form supports fresh and revised review, conflict/confidentiality controls, structured scientific and ethical assessment, revision verification, overall recommendation, and applicant-facing privacy controls.
+
+## Deployment
+
+No new environment variable is required. Existing deployments may change `APP_NAME` to `UCC IRB Ethical Clearance Portal` for consistent service/email naming. Use `/healthz` to confirm the V19 build after deployment.
+
+---
+
 # V17 security compatibility update
 
 Build ID: `2026-08-10-no-origin-block-v17`

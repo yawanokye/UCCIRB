@@ -5,6 +5,8 @@ services:
     plan: starter
     healthCheckPath: /healthz
     envVars:
+      - key: APP_NAME
+        value: UCC IRB Ethical Clearance Portal
       - key: SECRET_KEY
         generateValue: true
       - key: SESSION_HTTPS_ONLY
