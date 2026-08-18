@@ -113,12 +113,13 @@ def register_applicant(
 
 
 @router.get('/login')
-def login_page(request: Request, portal: str = Query('applicant')):
+def login_page(request: Request, portal: str = Query('applicant'), expired: int = Query(0)):
     portal = normalise_portal(portal)
+    error = 'Your session has expired. Please sign in again to continue.' if expired else None
     return request.app.state.templates.TemplateResponse(
         request,
         'login.html',
-        {'error': None, 'portal': portal},
+        {'error': error, 'portal': portal},
     )
 
 
@@ -206,7 +207,7 @@ def login(
 
 
 @router.get('/system-admin/login')
-def system_admin_login_page(request: Request, db: Session = Depends(get_db)):
+def system_admin_login_page(request: Request, expired: int = Query(0), db: Session = Depends(get_db)):
     current_id = request.session.get('user_id')
     if current_id:
         current = db.get(User, current_id)
@@ -215,7 +216,7 @@ def system_admin_login_page(request: Request, db: Session = Depends(get_db)):
     return request.app.state.templates.TemplateResponse(
         request,
         'login.html',
-        {'error': None, 'portal': 'system_admin'},
+        {'error': 'Your session has expired. Please sign in again to continue.' if expired else None, 'portal': 'system_admin'},
     )
 
 

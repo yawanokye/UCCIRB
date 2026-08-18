@@ -13,10 +13,10 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, joinedload
 
-from ..config import (CLEARANCE_VALIDITY_DAYS, REVIEW_DUE_DAYS, PUBLIC_BASE_URL,
+from ..config import (BASE_DIR, CLEARANCE_VALIDITY_DAYS, REVIEW_DUE_DAYS, PUBLIC_BASE_URL,
                       REVIEW_ASSIGNMENT_LINK_EXPIRY_DAYS, MAX_REVIEWERS_PER_APPLICATION)
 from ..database import get_db
 from ..models import (
@@ -98,6 +98,37 @@ DEFAULT_REVIEW_MATERIALS = {
 
 MAX_REVIEW_EMAIL_ATTACHMENT_BYTES = 18 * 1024 * 1024
 MAX_REVIEW_EMAIL_ATTACHMENTS = 18
+
+REVIEWER_ASSESSMENT_FORM_PATH = BASE_DIR / 'app' / 'private_resources' / 'ucc-irb-research-ethics-reviewer-assessment-form.docx'
+REVIEWER_ASSESSMENT_FORM_NAME = 'UCC-IRB Research Ethics Reviewer Assessment Form.docx'
+
+
+def prerequisite_redirect(app_id: str, message: str, target: str = 'actions'):
+    from urllib.parse import quote_plus
+    return RedirectResponse(
+        f'/applications/{app_id}?required={quote_plus(target)}&required_message={quote_plus(message)}#{target}',
+        status_code=303,
+    )
+
+
+def applicant_can_remove_document(db: Session, app: EthicsApplication, doc: ApplicationDocument) -> bool:
+    if doc.application_id != app.id:
+        return False
+    if app.status == AppStatus.DRAFT.value:
+        return True
+    if app.status == AppStatus.RETURNED_ADMIN.value:
+        check = db.scalar(select(SecretariatDocumentCheck).where(SecretariatDocumentCheck.document_id == doc.id))
+        return check is None or not check.verified
+    stage = db.scalar(select(DocumentSubmissionMeta).where(DocumentSubmissionMeta.document_id == doc.id))
+    if not stage:
+        return False
+    if app.status == AppStatus.COLLEGE_REVISION.value and stage.submission_kind == 'college_revision':
+        _, current_round = current_upload_stage(db, app)
+        return stage.round_no == current_round
+    if app.status == AppStatus.IRB_REVISION.value and stage.submission_kind == 'irb_revision':
+        _, current_round = current_upload_stage(db, app)
+        return stage.round_no == current_round
+    return False
 
 
 def ctx(request, user=None, **kwargs):
@@ -689,6 +720,10 @@ def review_email_attachments_for_batch(db: Session, batch: ReviewAssignmentBatch
     attachments = []
     skipped = []
     total = 0
+    if REVIEWER_ASSESSMENT_FORM_PATH.exists():
+        form_size = REVIEWER_ASSESSMENT_FORM_PATH.stat().st_size
+        attachments.append((REVIEWER_ASSESSMENT_FORM_PATH, REVIEWER_ASSESSMENT_FORM_NAME))
+        total += form_size
     for item in items:
         assignment = item.assignment
         app = assignment.application
@@ -704,11 +739,12 @@ def review_email_attachments_for_batch(db: Session, batch: ReviewAssignmentBatch
                 continue
             attachments.append((path, filename))
             total += size
-    note = f'{len(attachments)} selected document(s) attached to this email.'
+    selected_count = max(0, len(attachments) - (1 if REVIEWER_ASSESSMENT_FORM_PATH.exists() else 0))
+    note = f'The UCC-IRB reviewer assessment form is attached. {selected_count} selected application document(s) are also attached to this email.'
     if skipped:
-        note += f' {len(skipped)} additional selected document(s) were kept in the secure workspace because of email attachment limits.'
+        note += f' {len(skipped)} additional selected document(s) remain available in the secure workspace because of email attachment limits.'
     if not attachments:
-        note = 'No document files were attached. The selected review materials remain available in the secure workspace.'
+        note = 'No files were attached. The selected review materials remain available in the secure workspace.'
     return attachments, note
 
 
@@ -1242,6 +1278,10 @@ def application_detail(request: Request, app_id: str, db: Session = Depends(get_
     assignment_documents = review_assignment_documents_map(db, assignments)
     college_revision_ready = app.id in college_revision_ready_ids(db, [app.id])
     prior_college_reviewers = previous_college_reviewers(db, app.id) if user.role == Role.COLLEGE_ADMIN.value and user.college_id == app.college_id else []
+    can_remove_document_ids = {d.id for d in documents if user.id == app.applicant_id and applicant_can_remove_document(db, app, d)}
+    required_target = (request.query_params.get('required') or '').strip()
+    required_message = (request.query_params.get('required_message') or '').strip()
+    missing_required = [x for x in (request.query_params.get('missing') or '').split('|') if x]
 
     college_reviewers = []
     irb_reviewers = []
@@ -1310,6 +1350,10 @@ def application_detail(request: Request, app_id: str, db: Session = Depends(get_
             assignment_documents=assignment_documents,
             college_revision_ready=college_revision_ready,
             previous_college_reviewers=prior_college_reviewers,
+            can_remove_document_ids=can_remove_document_ids,
+            required_target=required_target,
+            required_message=required_message,
+            missing_required=missing_required,
             college_reviewers=college_reviewers,
             irb_reviewers=irb_reviewers,
             reviewer_workload=reviewer_workload(db, irb_reviewers or college_reviewers),
@@ -1372,6 +1416,36 @@ def upload_document(
     return RedirectResponse(f'/applications/{app.id}', status_code=303)
 
 
+@router.post('/applications/{app_id}/documents/{document_id}/remove')
+def remove_applicant_document(request: Request, app_id: str, document_id: str, db: Session = Depends(get_db)):
+    user = require_user(request, db)
+    app = get_app_or_404(db, app_id)
+    if user.id != app.applicant_id:
+        raise HTTPException(403)
+    doc = db.get(ApplicationDocument, document_id)
+    if not doc or doc.application_id != app.id:
+        raise HTTPException(404, 'Document not found')
+    if not applicant_can_remove_document(db, app, doc):
+        return prerequisite_redirect(app.id, 'This document is already part of a locked review record. Upload a replacement version instead of removing the submitted record.', 'documents')
+
+    original_name = doc.original_name
+    document_type = doc.document_type
+    version = doc.version
+    path = storage_path(app.id, doc.stored_name)
+    db.execute(delete(SecretariatDocumentCheck).where(SecretariatDocumentCheck.document_id == doc.id))
+    db.execute(delete(DocumentSubmissionMeta).where(DocumentSubmissionMeta.document_id == doc.id))
+    db.execute(delete(ReviewAssignmentDocument).where(ReviewAssignmentDocument.document_id == doc.id))
+    db.delete(doc)
+    audit(db, user.id, 'applicant_document_removed', app.id, f'{document_type} v{version}: {original_name}')
+    db.commit()
+    try:
+        if path.exists():
+            path.unlink()
+    except OSError:
+        pass
+    return RedirectResponse(f'/applications/{app.id}#documents', status_code=303)
+
+
 @router.post('/applications/{app_id}/submit')
 def submit_application(request: Request, app_id: str, db: Session = Depends(get_db)):
     user = require_user(request, db)
@@ -1400,7 +1474,12 @@ def submit_application(request: Request, app_id: str, db: Session = Depends(get_
         missing.add('Completed IRB Checklist')
 
     if missing:
-        raise HTTPException(400, f'Missing required document(s): {", ".join(sorted(missing))}')
+        missing_sorted = sorted(missing)
+        from urllib.parse import quote_plus
+        return RedirectResponse(
+            f'/applications/{app.id}?required=documents&required_message={quote_plus("Complete the required document checklist before submitting the application.")}&missing={quote_plus("|".join(missing_sorted))}#document-upload',
+            status_code=303,
+        )
     if not app.reference_no:
         seq = (db.scalar(select(func.count(EthicsApplication.id)).where(EthicsApplication.submitted_at.is_not(None))) or 0) + 1
         app.reference_no = f'UCC-IRB-{datetime.utcnow().year}-{seq:05d}'
@@ -1433,14 +1512,19 @@ def submit_revision(request: Request, app_id: str, db: Session = Depends(get_db)
         note = 'Applicant submitted revised documents for IRB review'
     else:
         raise HTTPException(400, 'No revision is currently requested')
+    _, current_round = current_upload_stage(db, app)
     present = db.scalar(
-        select(ApplicationDocument.id).where(
+        select(ApplicationDocument.id)
+        .join(DocumentSubmissionMeta, DocumentSubmissionMeta.document_id == ApplicationDocument.id)
+        .where(
             ApplicationDocument.application_id == app.id,
             ApplicationDocument.document_type == required_type,
+            DocumentSubmissionMeta.submission_kind == submission_kind,
+            DocumentSubmissionMeta.round_no == current_round,
         )
     )
     if not present:
-        raise HTTPException(400, f'Upload {required_type} before submitting the revision.')
+        return prerequisite_redirect(app.id, f'Upload {required_type} for this revision round before submitting the revised application.', 'document-upload')
     round_no = (db.scalar(select(func.count(ApplicationSubmission.id)).where(
         ApplicationSubmission.application_id == app.id,
         ApplicationSubmission.submission_kind == submission_kind,
@@ -1533,9 +1617,9 @@ def secretariat_screen(
         checks = document_check_map(db, app.id)
         unchecked = [d for d in screening_documents if not checks.get(d.id) or not checks[d.id].verified]
         if missing:
-            raise HTTPException(400, 'Cannot mark complete. Required item(s) missing: ' + ', '.join(missing))
+            return prerequisite_redirect(app.id, 'Complete the required-document check before marking this application complete. Missing: ' + ', '.join(missing), 'secretariat-screening')
         if unchecked:
-            raise HTTPException(400, 'Cannot mark complete until every latest first-submission document is marked suitable in the Secretariat checklist.')
+            return prerequisite_redirect(app.id, 'Check every submitted document and mark each suitable before forwarding the application.', 'secretariat-screening')
 
         transition(db, app, AppStatus.ADMIN_COMPLETE.value, user.id, note or 'Administrative screening complete')
         resolve_attention_requests(db, app.id, user.id, 'Secretariat screening completed')
@@ -1558,7 +1642,7 @@ def secretariat_screen(
             raise HTTPException(400, 'Add an overall return note or a correction comment against at least one document before returning the application.')
         app.secretariat_note = note.strip() or 'Please address the document-specific Secretariat comments and resubmit.'
         resolve_attention_requests(db, app.id, user.id, 'Application returned to applicant for administrative correction')
-        transition(db, app, AppStatus.RETURNED_ADMIN.value, user.id, 'Returned to applicant following first-submission document screening')
+        transition(db, app, AppStatus.RETURNED_ADMIN.value, user.id, 'Returned to Applicant by IRB Secretariat')
         if gmail_configured():
             try:
                 secretariat_return_email(
@@ -2009,8 +2093,10 @@ def college_decision(
     user = require_user(request, db)
     require_roles(user, Role.COLLEGE_ADMIN.value)
     app = get_app_or_404(db, app_id)
-    if user.college_id != app.college_id or not is_scientific_committee_college(app.college) or app.status != AppStatus.AWAITING_COLLEGE_DECISION.value:
+    if user.college_id != app.college_id or not is_scientific_committee_college(app.college):
         raise HTTPException(403)
+    if app.status != AppStatus.AWAITING_COLLEGE_DECISION.value:
+        return prerequisite_redirect(app.id, 'Complete the required scientific review or revision disposition before recording a College Scientific Committee decision.', 'review-prerequisite')
     allowed = {'recommend', 'minor_revision', 'major_revision', 'specialist_review', 'not_recommended'}
     if decision not in allowed:
         raise HTTPException(400, 'Unknown College decision')
@@ -2027,7 +2113,7 @@ def college_decision(
         transition(db, app, AppStatus.SCIENTIFICALLY_RECOMMENDED.value, user.id, comments or 'Scientifically recommended by College Scientific Committee')
         transition(db, app, AppStatus.RETURNED_TO_IRB.value, user.id, 'College scientific review completed and application returned to IRB Secretariat')
     elif decision in {'minor_revision', 'major_revision'}:
-        transition(db, app, AppStatus.COLLEGE_REVISION.value, user.id, comments or decision.replace('_', ' ').title())
+        transition(db, app, AppStatus.COLLEGE_REVISION.value, user.id, 'Returned to Applicant by College Scientific Committee')
     elif decision == 'specialist_review':
         transition(db, app, AppStatus.AWAITING_COLLEGE_REVIEWER.value, user.id, comments or 'Specialist scientific review required')
     else:
@@ -2060,7 +2146,7 @@ def classify_irb_review(
     require_roles(user, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value)
     app = get_app_or_404(db, app_id)
     if app.status not in {AppStatus.RETURNED_TO_IRB.value, AppStatus.DIRECT_IRB.value, AppStatus.IRB_CLASSIFICATION.value}:
-        raise HTTPException(400, 'Application is not ready for IRB classification.')
+        return prerequisite_redirect(app.id, 'Complete the preceding scientific or Secretariat review stage before IRB classification.', 'irb-prerequisite')
     if classification not in {'exempt', 'expedited', 'full_board'}:
         raise HTTPException(400, 'Select a valid review classification.')
     db.add(IRBClassification(application_id=app.id, classification=classification, rationale=rationale or None, classified_by=user.id))
@@ -2216,14 +2302,14 @@ def final_irb_decision(
     require_roles(user, Role.IRB_CHAIR.value, Role.SUPERADMIN.value)
     app = get_app_or_404(db, app_id)
     if app.status not in {AppStatus.AWAITING_FINAL_DECISION.value, AppStatus.FULL_BOARD.value, AppStatus.DEFERRED.value}:
-        raise HTTPException(400, 'Application is not awaiting a final IRB decision.')
+        return prerequisite_redirect(app.id, 'Complete the required IRB review stage before recording the final IRB decision.', 'irb-prerequisite')
     if decision not in {'approved', 'approved_conditions', 'deferred', 'rejected'}:
         raise HTTPException(400, 'Select a valid IRB decision.')
     if decision == 'approved_conditions' and not conditions.strip():
-        raise HTTPException(400, 'Enter the conditions attached to approval.')
+        return prerequisite_redirect(app.id, 'Enter the approval conditions before recording an approval with conditions.', 'final-decision')
     meeting = db.get(IRBMeeting, meeting_id) if meeting_id else None
     if app.status == AppStatus.FULL_BOARD.value and not meeting:
-        raise HTTPException(400, 'Select the IRB meeting at which the Full Board decision was made.')
+        return prerequisite_redirect(app.id, 'Select the IRB meeting at which the Full Board decision was made.', 'final-decision')
     if meeting and not db.scalar(select(IRBMeetingItem.id).where(IRBMeetingItem.meeting_id == meeting.id, IRBMeetingItem.application_id == app.id)):
         raise HTTPException(400, 'This application is not listed on the selected IRB meeting agenda.')
 
@@ -2935,6 +3021,47 @@ def _batch_item_assignment(db: Session, batch: ReviewAssignmentBatch, assignment
     return item, assignment
 
 
+@router.get('/reviewer-assessment-form')
+def reviewer_assessment_form(request: Request, db: Session = Depends(get_db)):
+    user = require_user(request, db)
+    require_roles(
+        user,
+        Role.COLLEGE_ADMIN.value,
+        Role.COLLEGE_REVIEWER.value,
+        Role.IRB_SECRETARIAT.value,
+        Role.IRB_REVIEWER.value,
+        Role.IRB_CHAIR.value,
+        Role.SUPERADMIN.value,
+    )
+    if not REVIEWER_ASSESSMENT_FORM_PATH.exists():
+        raise HTTPException(404, 'Reviewer assessment form is unavailable.')
+    return FileResponse(
+        REVIEWER_ASSESSMENT_FORM_PATH,
+        media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        filename=REVIEWER_ASSESSMENT_FORM_NAME,
+        headers={'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow'},
+    )
+
+
+@router.get('/secure/reviews/{token}/reviewer-assessment-form')
+def secure_reviewer_assessment_form(token: str, db: Session = Depends(get_db)):
+    batch = get_review_batch_by_token(db, token)
+    ok, status, message = validate_review_batch(batch)
+    if not ok:
+        raise HTTPException(status, message)
+    if not REVIEWER_ASSESSMENT_FORM_PATH.exists():
+        raise HTTPException(404, 'Reviewer assessment form is unavailable.')
+    batch.last_accessed_at = datetime.utcnow()
+    batch.access_count += 1
+    db.commit()
+    return FileResponse(
+        REVIEWER_ASSESSMENT_FORM_PATH,
+        media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        filename=REVIEWER_ASSESSMENT_FORM_NAME,
+        headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag': 'noindex, nofollow'},
+    )
+
+
 @router.get('/secure/reviews/{token}')
 def secure_review_workspace(request: Request, token: str, db: Session = Depends(get_db)):
     batch = get_review_batch_by_token(db, token)
@@ -2957,6 +3084,8 @@ def secure_review_workspace(request: Request, token: str, db: Session = Depends(
     reports = report_documents_map(db, assignments)
     assignment_documents = review_assignment_documents_map(db, assignments)
     db.commit()
+    required_target = (request.query_params.get('required') or '').strip()
+    required_item = (request.query_params.get('item') or '').strip()
     return request.app.state.templates.TemplateResponse(
         request,
         'secure_review_workspace.html',
@@ -2971,6 +3100,8 @@ def secure_review_workspace(request: Request, token: str, db: Session = Depends(
             'token': token,
             'error': None,
             'now': datetime.utcnow(),
+            'required_target': required_target,
+            'required_item': required_item,
         },
         headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag': 'noindex, nofollow'},
     )
@@ -3034,7 +3165,7 @@ def secure_review_package(token: str, assignment_id: str, db: Session = Depends(
     _, assignment = _batch_item_assignment(db, batch, assignment_id)
     declaration = db.scalar(select(ReviewerDeclaration).where(ReviewerDeclaration.assignment_id == assignment.id))
     if not declaration or declaration.declaration != 'clear':
-        raise HTTPException(403, 'Complete a no-conflict declaration before accessing research documents.')
+        return RedirectResponse(f'/secure/reviews/{token}?required=declaration&item={assignment.id}#item-{assignment.id}', status_code=303)
 
     app = assignment.application
     selected_docs = selected_review_documents(db, assignment.id)
@@ -3054,7 +3185,9 @@ def secure_review_package(token: str, assignment_id: str, db: Session = Depends(
             f'Review level: {assignment.level}\n'
         )
         zf.writestr('00 - Application Summary.txt', summary)
-        for idx, doc in enumerate(package_docs, start=1):
+        if REVIEWER_ASSESSMENT_FORM_PATH.exists():
+            zf.write(REVIEWER_ASSESSMENT_FORM_PATH, '01 - UCC-IRB Research Ethics Reviewer Assessment Form.docx')
+        for idx, doc in enumerate(package_docs, start=2):
             path = storage_path(app.id, doc.stored_name)
             if path.exists():
                 suffix = path.suffix or ''
