@@ -1,9 +1,9 @@
 import fastapi
 import starlette
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -16,6 +16,7 @@ from .models import (AppStatus, ApplicationDocument, College, CollegeAccessReque
 from .services.auth import hash_password
 from .services.routing import ensure_routing_units, is_scientific_committee_college
 from .security import csrf_protect, request_rate_limit, security_headers
+from .services.workflow import status_label
 from sqlalchemy import select
 
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -151,10 +152,29 @@ app.middleware('http')(security_headers)
 
 app.mount('/static', StaticFiles(directory=BASE_DIR / 'app' / 'static'), name='static')
 app.state.templates = Jinja2Templates(directory=BASE_DIR / 'app' / 'templates')
+app.state.templates.env.globals['status_label'] = status_label
 app.include_router(auth.router)
 app.include_router(portal.router)
 
-BUILD_ID = '2026-08-10-review-report-revision-queue-v18'
+BUILD_ID = '2026-08-18-applicant-controls-prerequisites-v19'
+
+
+@app.exception_handler(HTTPException)
+async def portal_http_exception_handler(request: Request, exc: HTTPException):
+    # Protected browser pages should never leave an expired user on a raw 401 JSON page.
+    if exc.status_code == 401:
+        expired_portal = getattr(request.state, 'expired_portal', None)
+        portal = expired_portal or request.session.get('portal')
+        path = request.url.path
+        expired_q = '&expired=1' if expired_portal else ''
+        if portal == 'system_admin' or path.startswith('/system-admin'):
+            target = '/system-admin/login' + ('?expired=1' if expired_portal else '')
+        elif portal == 'administrative' or path.startswith(('/secretariat', '/college', '/irb', '/review-batches', '/account')):
+            target = '/login?portal=administrative' + expired_q
+        else:
+            target = '/login?portal=applicant' + expired_q
+        return RedirectResponse(target, status_code=303)
+    return JSONResponse({'detail': exc.detail}, status_code=exc.status_code, headers=getattr(exc, 'headers', None))
 
 
 @app.get('/healthz', include_in_schema=False)
@@ -192,4 +212,10 @@ def healthz():
         'admin_login_lockout': 'account-and-ip',
         'login_rate_controls': True,
         'secure_upload_validation': True,
+        'applicant_document_removal': True,
+        'friendly_return_status_labels': True,
+        'routing_details_applicant_hidden': True,
+        'expired_session_redirects_to_login': True,
+        'prerequisite_redirect_guidance': True,
+        'reviewer_assessment_form': 'ucc-irb-research-ethics-reviewer-assessment-form.docx',
     })
