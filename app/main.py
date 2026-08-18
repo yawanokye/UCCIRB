@@ -156,11 +156,19 @@ app.state.templates.env.globals['status_label'] = status_label
 app.include_router(auth.router)
 app.include_router(portal.router)
 
-BUILD_ID = '2026-08-18-applicant-controls-prerequisites-v19'
+BUILD_ID = '2026-08-18-secure-review-csrf-v20'
 
 
 @app.exception_handler(HTTPException)
 async def portal_http_exception_handler(request: Request, exc: HTTPException):
+    # Secure reviewer workspaces use an emailed capability link rather than a portal
+    # account. If a stale form-security token is encountered, refresh the workspace
+    # instead of exposing a raw JSON 403 page.
+    if exc.status_code == 403 and request.url.path.startswith('/secure/reviews/') and str(exc.detail).startswith('Security token'):
+        parts = request.url.path.split('/')
+        review_token = parts[3] if len(parts) > 3 else ''
+        if review_token:
+            return RedirectResponse(f'/secure/reviews/{review_token}?security=refresh', status_code=303)
     # Protected browser pages should never leave an expired user on a raw 401 JSON page.
     if exc.status_code == 401:
         expired_portal = getattr(request.state, 'expired_portal', None)
@@ -218,4 +226,6 @@ def healthz():
         'expired_session_redirects_to_login': True,
         'prerequisite_redirect_guidance': True,
         'reviewer_assessment_form': 'ucc-irb-research-ethics-reviewer-assessment-form.docx',
+        'secure_reviewer_form_csrf': 'stateless-hmac-bound-to-review-link-v2',
+        'secure_reviewer_security_error_redirect': True,
     })

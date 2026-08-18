@@ -110,6 +110,18 @@ def ensure_csrf_token(request: Request) -> str:
     return token
 
 
+
+
+def secure_review_form_token(review_token: str) -> str:
+    """Stateless CSRF token bound to the high-entropy emailed review capability URL.
+
+    Secure reviewers do not have portal accounts or authenticated sessions. Binding the
+    form token to the emailed review token avoids requiring a login/session cookie while
+    still preventing a blind cross-site POST from another site.
+    """
+    message = f"secure-review-form:{review_token}".encode("utf-8")
+    return hmac.new(SECRET_KEY.encode("utf-8"), message, hashlib.sha256).hexdigest()
+
 def same_origin(request: Request) -> bool:
     origin = request.headers.get("origin")
     referer = request.headers.get("referer")
@@ -141,6 +153,29 @@ async def csrf_protect(request: Request):
     # Public authentication stays low-friction; protected workflow forms still
     # require the session-bound CSRF token below.
     if request.url.path in {"/login", "/register"}:
+        return
+
+    # Secure reviewer workspaces are authenticated by a high-entropy bearer token in
+    # the emailed URL, not by a normal portal login session. Use a stateless HMAC form
+    # token bound to that review token so reviewer actions do not fail when their
+    # browser session changes or expires.
+    if request.url.path.startswith("/secure/reviews/"):
+        parts = request.url.path.split("/")
+        review_token = parts[3] if len(parts) > 3 else ""
+        supplied = request.headers.get("x-review-form-token")
+        if not supplied:
+            try:
+                form = await request.form()
+                supplied = form.get("review_form_token")
+            except Exception:
+                supplied = None
+        expected = secure_review_form_token(review_token) if review_token else ""
+        if not supplied or not expected or not hmac.compare_digest(str(supplied), expected):
+            logger.warning(
+                "Secure reviewer form-token rejection path=%s supplied=%s",
+                request.url.path, bool(supplied),
+            )
+            raise HTTPException(status_code=403, detail="Security token missing or invalid. Refresh the review page and try again.")
         return
 
     header_token = request.headers.get("x-csrf-token")
