@@ -18,7 +18,7 @@ SCIENTIFIC_COMMITTEE_CODES = frozenset(code for code, _ in SCIENTIFIC_COMMITTEE_
 # Routing placeholder for UCC units that do not belong to one of the five Scientific
 # Committee Colleges. The exact unit is captured in the application's Department / Unit field.
 DIRECT_IRB_CODE = "IRB-DIRECT"
-DIRECT_IRB_NAME = "Other UCC Academic/Administrative Unit (Direct IRB Secretariat)"
+DIRECT_IRB_NAME = "Other UCC Academic/Administrative Unit"
 
 
 def ensure_routing_units(db: Session) -> None:

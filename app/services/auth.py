@@ -64,15 +64,18 @@ def current_user(request: Request, db: Session) -> User | None:
     now = int(time.time())
     last_seen = int(request.session.get('last_seen', now))
     if now - last_seen > SESSION_IDLE_MINUTES * 60:
+        request.state.expired_portal = request.session.get('portal')
         request.session.clear()
         return None
     request.session['last_seen'] = now
 
     user = db.get(User, user_id)
     if not user or not user.active:
+        request.state.expired_portal = request.session.get('portal')
         request.session.clear()
         return None
     if user.role == Role.SUPERADMIN.value and SUPERADMIN_ALLOWED_IPS and _client_ip(request) not in SUPERADMIN_ALLOWED_IPS:
+        request.state.expired_portal = request.session.get('portal')
         request.session.clear()
         return None
     return user
