@@ -51,6 +51,7 @@ from ..models import (
     User,
 )
 from ..services.auth import hash_password, require_roles, require_user
+from ..security import secure_review_form_token
 from ..services.certificate import certificate_path, generate_certificate_pdf
 from ..services.email import (college_revision_request_email, college_revision_submitted_email,
                               gmail_configured, review_assignment_email, secretariat_return_email)
@@ -3098,6 +3099,8 @@ def secure_review_workspace(request: Request, token: str, db: Session = Depends(
             'reports': reports,
             'assignment_documents': assignment_documents,
             'token': token,
+            'review_form_token': secure_review_form_token(token),
+            'security_notice': (request.query_params.get('security') or '').strip(),
             'error': None,
             'now': datetime.utcnow(),
             'required_target': required_target,
