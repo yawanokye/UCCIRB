@@ -307,3 +307,8 @@ If a reviewer report disappeared before V18 because `/app/storage` was not persi
 - Secure reviewer report submission uses the same link-bound token, including multipart upload submissions.
 - Reviewers continue to authenticate with the secure emailed assignment link and do not need an applicant or administrative login.
 - A stale reviewer form-security check redirects back to the secure reviewer workspace rather than exposing a raw JSON 403 page.
+
+
+## V21 Google Search Console verification
+
+The public base template includes the Google site verification token supplied for `https://ucc-irb-portal.onrender.com/`. After deployment, verify the URL-prefix property in Google Search Console, then inspect **Security & Manual Actions → Security Issues** before submitting a Safe Browsing review.
