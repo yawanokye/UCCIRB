@@ -156,7 +156,7 @@ app.state.templates.env.globals['status_label'] = status_label
 app.include_router(auth.router)
 app.include_router(portal.router)
 
-BUILD_ID = '2026-08-18-secure-review-csrf-v20'
+BUILD_ID = '2026-08-18-google-verification-v21'
 
 
 @app.exception_handler(HTTPException)
