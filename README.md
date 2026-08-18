@@ -1,6 +1,6 @@
 # UCC IRB Ethical Clearance Portal — Phase 2 V19
 
-Build ID: `2026-08-18-applicant-controls-prerequisites-v19`
+Build ID: `2026-08-18-secure-review-csrf-v20`
 
 V19 improves the applicant and reviewer experience while keeping routing controls internal.
 
@@ -299,3 +299,11 @@ Applicant authentication was adjusted to reduce false 403/429 responses on share
 ### Important for older missing reports
 
 If a reviewer report disappeared before V18 because `/app/storage` was not persistent, V18 cannot recreate the lost bytes. The assignment page will show **Request report re-upload**. After reopening the assignment, use **Regenerate & Resend Secure Link** if the reviewer needs a new link. All newly uploaded reviewer files receive the database fallback automatically.
+
+
+## V20 secure reviewer form fix
+
+- Secure reviewer Conflict-of-Interest Declaration now carries a stateless HMAC security token bound to the emailed review link.
+- Secure reviewer report submission uses the same link-bound token, including multipart upload submissions.
+- Reviewers continue to authenticate with the secure emailed assignment link and do not need an applicant or administrative login.
+- A stale reviewer form-security check redirects back to the secure reviewer workspace rather than exposing a raw JSON 403 page.
