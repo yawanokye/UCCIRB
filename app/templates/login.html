@@ -14,6 +14,11 @@
     <p>Access your ethical clearance applications, documents, revisions and status updates.</p>
   {% endif %}
 
+  <div class="auth-verification-note">
+    <strong>Verify this login page before entering credentials.</strong>
+    <span>Current host: <code>{{ request.url.hostname }}</code>. This UCC IRB service is hosted on Render. It will never ask you to install software or provide bank/card details. For verification, contact <a href="mailto:irb@ucc.edu.gh">irb@ucc.edu.gh</a> or visit the <a href="https://irb.ucc.edu.gh/" target="_blank" rel="noopener noreferrer">official UCC IRB information site</a>.</span>
+  </div>
+
   {% if error %}<div class="alert danger">{{ error }}</div>{% endif %}
 
   <form method="post" action="{% if portal == 'system_admin' %}/system-admin/login{% else %}/login{% endif %}">

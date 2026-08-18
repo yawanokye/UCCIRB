@@ -1,0 +1,41 @@
+{% extends 'base.html' %}
+{% block title %}About & Verification · UCC IRB Ethical Clearance Portal{% endblock %}
+{% block content %}
+<section class="guide-head service-about-head">
+  <div><span class="eyebrow">Service identity & verification</span><h1>About the UCC IRB Ethical Clearance Portal</h1><p>This page explains who the service is for, where it is hosted, what information it requests, and how users can independently verify communications.</p></div>
+</section>
+
+<section class="guide-section">
+  <div class="section-title"><span class="guide-number">1</span><div><span class="eyebrow">Identity</span><h2>University of Cape Coast Institutional Review Board</h2></div></div>
+  <p>The portal supports ethical-clearance applications, administrative screening, College Scientific Committee review, IRB review and authorised ethical-clearance decisions.</p>
+  <div class="verification-facts">
+    <div><strong>Current service host</strong><span>{{ request.url.hostname }}</span></div>
+    <div><strong>Hosting platform</strong><span>Render web service</span></div>
+    <div><strong>Official UCC IRB information</strong><a href="https://irb.ucc.edu.gh/" target="_blank" rel="noopener noreferrer">irb.ucc.edu.gh</a></div>
+    <div><strong>IRB verification email</strong><a href="mailto:irb@ucc.edu.gh">irb@ucc.edu.gh</a></div>
+    <div><strong>IRB contact lines</strong><span>0558093143 / 0508878309</span></div>
+  </div>
+</section>
+
+<section class="guide-section">
+  <div class="section-title"><span class="guide-number">2</span><div><span class="eyebrow">Safety</span><h2>What this portal will and will not ask you to do</h2></div></div>
+  <div class="important-grid">
+    <div><strong>Applicant accounts</strong><p>Applicants create an account to submit and manage their own ethical-clearance applications.</p></div>
+    <div><strong>Administrative accounts</strong><p>Administrative users receive accounts created by authorised system administrators and are restricted by role.</p></div>
+    <div><strong>Reviewer links</strong><p>External reviewers use a unique secure assignment link. The reviewer link does not require the reviewer's UCC password.</p></div>
+    <div><strong>No software installation</strong><p>The portal does not require browser extensions, executable downloads, remote-access software or device configuration.</p></div>
+    <div><strong>No banking credentials</strong><p>Login and reviewer pages do not request bank-account numbers, card numbers, PINs or mobile-money PINs.</p></div>
+    <div><strong>Verify suspicious communication</strong><p>If an email or page asks for something outside these functions, stop and verify it with the UCC IRB Secretariat.</p></div>
+  </div>
+</section>
+
+<section class="guide-section">
+  <div class="section-title"><span class="guide-number">3</span><div><span class="eyebrow">Independent verification</span><h2>How to verify the service</h2></div></div>
+  <ol class="verification-steps">
+    <li>Check the browser address bar before entering credentials.</li>
+    <li>Use the official UCC IRB information site to confirm the Board's contact information.</li>
+    <li>For a questionable invitation or login page, contact <a href="mailto:irb@ucc.edu.gh">irb@ucc.edu.gh</a> or 0558093143 / 0508878309.</li>
+    <li>Do not bypass a browser security warning. Report it to the IRB Secretariat or system administrator.</li>
+  </ol>
+</section>
+{% endblock %}

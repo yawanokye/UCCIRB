@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#1F2056">
   <meta name="google-site-verification" content="56j701nrmCH2zAJ-6AyrSCGm-OvyNVi6kpRfIXQpMVk">
+  <meta name="description" content="University of Cape Coast Institutional Review Board ethical clearance application and research ethics review portal.">
+  {% if request.url.path.startswith('/login') or request.url.path.startswith('/register') or request.url.path.startswith('/system-admin') %}<meta name="robots" content="noindex,nofollow">{% endif %}
   <meta name="csrf-token" content="{{ request.session.get('csrf_token', '') }}">
   <title>{% block title %}UCC IRB Ethical Clearance Portal{% endblock %}</title>
   <link rel="icon" type="image/png" href="/static/img/ucc-brand.png">
@@ -34,9 +36,19 @@
       <a href="/register">Apply</a>
       <a href="/login?portal=applicant">Applicant Login</a>
       <a href="/applicant-guide">Applicant Guide & Resources</a>
+      <a href="/about-verification">About & Verification</a>
     </div>
   </div>
 </nav>
+{% endif %}
+
+{% if not user %}
+<section class="service-identity-bar" aria-label="Service identity and verification">
+  <div class="service-identity-inner">
+    <div><strong>UCC IRB service identity</strong><span>This University of Cape Coast IRB web application is currently hosted on Render. Official UCC IRB information is published at <a href="https://irb.ucc.edu.gh/" target="_blank" rel="noopener noreferrer">irb.ucc.edu.gh</a>.</span></div>
+    <div><span>This portal will never ask you to install software or provide bank-card details.</span><a href="mailto:irb@ucc.edu.gh">Verify with irb@ucc.edu.gh</a></div>
+  </div>
+</section>
 {% endif %}
 
 {% if user %}
@@ -54,7 +66,8 @@
 <main class="container">{% block content %}{% endblock %}</main>
 <footer>
   <strong>University of Cape Coast</strong><br>
-  Institutional Review Board · Research Ethics Governance Portal
+  Institutional Review Board · Research Ethics Governance Portal<br>
+  <a href="/about-verification">About this service & verification</a> · <a href="https://irb.ucc.edu.gh/" target="_blank" rel="noopener noreferrer">Official UCC IRB information site</a>
 </footer>
 <script>
 (function(){

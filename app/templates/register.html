@@ -6,6 +6,11 @@
   <h1>Create your account</h1>
   <p>Create your own applicant account. After registration, the portal will take you directly to the new ethical clearance application form.</p>
 
+  <div class="auth-verification-note">
+    <strong>Service identity</strong>
+    <span>This account is for UCC IRB ethical-clearance applications. The service is currently hosted on Render. Registration never asks for payment-card or banking details. Verify the service through <a href="mailto:irb@ucc.edu.gh">irb@ucc.edu.gh</a> or the <a href="https://irb.ucc.edu.gh/" target="_blank" rel="noopener noreferrer">official UCC IRB information site</a>.</span>
+  </div>
+
   {% if error %}<div class="alert danger">{{ error }}</div>{% endif %}
 
   <form method="post" action="/register">

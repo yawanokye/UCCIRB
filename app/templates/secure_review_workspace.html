@@ -1,8 +1,12 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Secure Review Workspace · UCC IRB Ethical Clearance Portal</title><link rel="icon" type="image/png" href="/static/img/ucc-brand.png"><link rel="stylesheet" href="/static/app.css"></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="description" content="Secure UCC IRB research ethics reviewer workspace."><title>Secure Review Workspace · UCC IRB Ethical Clearance Portal</title><link rel="icon" type="image/png" href="/static/img/ucc-brand.png"><link rel="stylesheet" href="/static/app.css"></head>
 <body>
 <header class="ucc-header"><div class="ucc-header-inner"><a class="ucc-brand-link" href="#"><img src="/static/img/ucc-brand.png" class="ucc-brand-image" alt="University of Cape Coast"></a><div class="secure-badge">Secure Reviewer Workspace</div></div><div class="ucc-gold-line"></div></header>
 <main class="container secure-workspace">
+<div class="reviewer-verification-banner">
+  <strong>Reviewer security notice</strong>
+  <span>This workspace is opened by the unique review link sent to you. It will never ask for your UCC password, bank/card details, or software installation. Verify unexpected review invitations with <a href="mailto:irb@ucc.edu.gh">irb@ucc.edu.gh</a> or the assigning College Scientific Committee.</span>
+</div>
 {% if error %}<div class="authcard"><span class="eyebrow">Secure review assignment</span><h1>Link unavailable</h1><div class="alert danger">{{ error }}</div><p class="hint">Contact the UCC IRB Secretariat or the assigning College Scientific Committee.</p></div>{% else %}
 <div class="pagehead"><div><span class="eyebrow">{{ batch.reference }}</span><h1>{{ 'College Scientific Review' if batch.level == 'college' else 'IRB Ethical Review' }} Workspace</h1><p>Reviewer: <strong>{% if review_contact %}{{ review_contact.title or '' }} {{ review_contact.first_name }} {{ review_contact.last_name }}{% else %}{{ batch.reviewer.full_name }}{% endif %}</strong>. This workspace contains {{ items|length }} assigned application{{ '' if items|length == 1 else 's' }}. Submit each review separately.</p></div><div class="secure-deadline"><small>Review due</small><strong>{{ batch.due_at.strftime('%d %b %Y') }}</strong></div></div>
 {% if security_notice == 'refresh' %}<div class="alert warning"><strong>Security check refreshed.</strong> Please repeat the action you were taking. You do not need to log in again.</div>{% endif %}
