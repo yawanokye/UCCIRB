@@ -39,7 +39,7 @@ STATUS_LABELS = {
     AppStatus.IRB_REVIEW.value: 'Under IRB Ethical Review',
     AppStatus.IRB_REVISION.value: 'Returned to Applicant by IRB',
     AppStatus.IRB_REVISED.value: 'Revised Submission Received by IRB',
-    AppStatus.FULL_BOARD.value: 'Scheduled for Full Board Review',
+    AppStatus.FULL_BOARD.value: 'Full Board Review Required',
     AppStatus.AWAITING_FINAL_DECISION.value: 'Awaiting Final IRB Decision',
     AppStatus.CONDITIONAL_APPROVAL_PENDING_RATIFICATION.value: 'Ethical Approval Granted – Pending Board Ratification',
     AppStatus.BOARD_RATIFIED.value: 'IRB Board Ratification Completed',
