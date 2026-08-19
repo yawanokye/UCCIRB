@@ -56,7 +56,7 @@ from ..services.certificate import certificate_path, generate_certificate_pdf
 from ..services.email import (college_revision_request_email, college_revision_submitted_email,
                               gmail_configured, review_assignment_email, secretariat_return_email)
 from ..services.storage import safe_original_name, save_upload, storage_path
-from ..services.workflow import audit, transition
+from ..services.workflow import APPLICANT_HIDDEN_STATUSES, audit, transition
 from ..services.routing import (
     DIRECT_IRB_CODE,
     SCIENTIFIC_COMMITTEE_CODES,
@@ -879,6 +879,7 @@ def active_duplicate_assignment(db: Session, app_id: str, reviewer_id: str, leve
 
 
 def issue_clearance(db: Session, app: EthicsApplication, issuer: User, conditions: str | None = None):
+    """Issue the final ethics approval certificate after an authorised IRB approval."""
     year = datetime.utcnow().year
     seq = (db.scalar(select(func.count(ClearanceCertificate.id)).where(func.extract('year', ClearanceCertificate.issue_date) == year)) or 0) + 1
     cert = ClearanceCertificate(
@@ -893,8 +894,29 @@ def issue_clearance(db: Session, app: EthicsApplication, issuer: User, condition
     )
     db.add(cert)
     db.flush()
-    cert.pdf_stored_name = generate_certificate_pdf(cert, app)
-    audit(db, issuer.id, 'ethical_clearance_certificate_issued', app.id, cert.certificate_no)
+    cert.pdf_stored_name = generate_certificate_pdf(cert, app, document_kind='ethical_clearance')
+    audit(db, issuer.id, 'ethics_approval_certificate_issued', app.id, cert.certificate_no)
+    return cert
+
+
+def issue_exemption_determination(db: Session, app: EthicsApplication, issuer: User, note: str | None = None):
+    """Issue a separately identified, QR-verifiable exemption determination."""
+    year = datetime.utcnow().year
+    seq = (db.scalar(select(func.count(ClearanceCertificate.id)).where(func.extract('year', ClearanceCertificate.issue_date) == year)) or 0) + 1
+    cert = ClearanceCertificate(
+        application_id=app.id,
+        certificate_no=f'UCC-IRB-EX-{year}-{seq:05d}',
+        verification_token=secrets.token_urlsafe(32),
+        issue_date=datetime.utcnow(),
+        expiry_date=datetime.utcnow() + timedelta(days=CLEARANCE_VALIDITY_DAYS),
+        status='valid',
+        conditions=note or None,
+        issued_by=issuer.id,
+    )
+    db.add(cert)
+    db.flush()
+    cert.pdf_stored_name = generate_certificate_pdf(cert, app, document_kind='exemption')
+    audit(db, issuer.id, 'exemption_determination_issued', app.id, cert.certificate_no)
     return cert
 
 
@@ -907,6 +929,17 @@ def home(request: Request, db: Session = Depends(get_db)):
         if candidate and candidate.active:
             user = candidate
     return request.app.state.templates.TemplateResponse(request, 'home.html', ctx(request, user))
+
+
+@router.get('/about-verification')
+def about_verification(request: Request, db: Session = Depends(get_db)):
+    user = None
+    user_id = request.session.get('user_id')
+    if user_id:
+        candidate = db.get(User, user_id)
+        if candidate and candidate.active:
+            user = candidate
+    return request.app.state.templates.TemplateResponse(request, 'about_verification.html', ctx(request, user))
 
 
 @router.get('/applicant-guide')
@@ -923,6 +956,17 @@ def applicant_guide(request: Request, db: Session = Depends(get_db)):
 @router.get('/resources')
 def resources_redirect():
     return RedirectResponse('/applicant-guide#resources', status_code=303)
+
+
+@router.get('/verify')
+def certificate_lookup(request: Request, certificate_no: str = '', db: Session = Depends(get_db)):
+    cert = None
+    searched = certificate_no.strip()
+    if searched:
+        cert = db.scalar(select(ClearanceCertificate).where(func.lower(ClearanceCertificate.certificate_no) == searched.lower()))
+        if cert:
+            return RedirectResponse(f'/verify/{cert.verification_token}', status_code=303)
+    return request.app.state.templates.TemplateResponse(request, 'certificate_lookup.html', ctx(request, None, searched=searched, not_found=bool(searched and not cert)))
 
 
 @router.get('/verify/{token}')
@@ -1043,12 +1087,15 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         direct_apps = [a for a in apps if is_direct_irb_affiliation(a.college)]
         college_path_apps = [a for a in apps if is_scientific_committee_college(a.college)]
         screening_apps = [a for a in apps if a.status in {AppStatus.SUBMITTED.value, AppStatus.SECRETARIAT_SCREENING.value}]
+        exempt_pending_apps = [a for a in apps if a.status == AppStatus.EXEMPT_DETERMINATION_PENDING.value]
+        final_decision_apps = [a for a in apps if a.status in {AppStatus.AWAITING_FINAL_DECISION.value, AppStatus.FULL_BOARD.value, AppStatus.DEFERRED.value}]
         return request.app.state.templates.TemplateResponse(
             request,
             'dashboard_secretariat.html',
             ctx(
                 request, user, apps=apps, pending_access=pending_access, post_requests=post_requests,
                 meetings_count=meetings_count, direct_apps=direct_apps, college_path_apps=college_path_apps, screening_apps=screening_apps, pending_attention=pending_attention,
+                exempt_pending_apps=exempt_pending_apps, final_decision_apps=final_decision_apps,
             ),
         )
 
@@ -1317,6 +1364,9 @@ def application_detail(request: Request, app_id: str, db: Session = Depends(get_
     status_history = db.scalars(
         select(StatusHistory).where(StatusHistory.application_id == app.id).order_by(StatusHistory.created_at.desc())
     ).all()
+    if user.id == app.applicant_id:
+        status_history = [h for h in status_history if h.to_status not in APPLICANT_HIDDEN_STATUSES]
+        irb_decisions = [d for d in irb_decisions if d.decision in {'approved', 'approved_conditions', 'rejected', 'exempt_confirmed'}]
     public_history_notes = {h.id: applicant_public_history_note(h.note) for h in status_history}
     meetings = db.scalars(select(IRBMeeting).where(IRBMeeting.status.in_(['scheduled', 'draft'])).order_by(IRBMeeting.meeting_date)).all()
     meeting_items = db.scalars(
@@ -2153,9 +2203,45 @@ def classify_irb_review(
     db.add(IRBClassification(application_id=app.id, classification=classification, rationale=rationale or None, classified_by=user.id))
     transition(db, app, AppStatus.IRB_CLASSIFICATION.value, user.id, f'Classified as {classification.replace("_", " ").title()}')
     if classification == 'exempt':
-        transition(db, app, AppStatus.AWAITING_FINAL_DECISION.value, user.id, 'Exempt determination awaiting authorised IRB decision')
+        transition(db, app, AppStatus.EXEMPT_DETERMINATION_PENDING.value, user.id, 'Awaiting authorised IRB exemption determination')
+    elif classification == 'expedited':
+        transition(db, app, AppStatus.AWAITING_IRB_REVIEWER.value, user.id, 'Awaiting IRB reviewer assignment')
     else:
-        transition(db, app, AppStatus.AWAITING_IRB_REVIEWER.value, user.id, 'Awaiting IRB ethical reviewer assignment')
+        transition(db, app, AppStatus.AWAITING_IRB_REVIEWER.value, user.id, 'Awaiting preliminary IRB reviewer assignment before Full Board consideration')
+    db.commit()
+    return RedirectResponse(f'/applications/{app.id}', status_code=303)
+
+
+@router.post('/irb/{app_id}/exempt-determination')
+def exempt_determination(
+    request: Request,
+    app_id: str,
+    determination: str = Form(...),
+    note: str = Form(''),
+    db: Session = Depends(get_db),
+):
+    user = require_user(request, db)
+    require_roles(user, Role.IRB_CHAIR.value, Role.SUPERADMIN.value)
+    app = get_app_or_404(db, app_id)
+    latest = latest_classification(db, app.id)
+    legacy_exempt_pending = app.status == AppStatus.AWAITING_FINAL_DECISION.value and latest and latest.classification == 'exempt'
+    if app.status != AppStatus.EXEMPT_DETERMINATION_PENDING.value and not legacy_exempt_pending:
+        return prerequisite_redirect(app.id, 'The application must first be classified for an exempt determination.', 'exempt-determination')
+    if determination not in {'confirm_exempt', 'expedited', 'full_board', 'return_clarification'}:
+        raise HTTPException(400, 'Select a valid exemption determination.')
+
+    if determination == 'confirm_exempt':
+        db.add(IRBDecision(application_id=app.id, decision='exempt_confirmed', conditions=note.strip() or None, decided_by=user.id))
+        transition(db, app, AppStatus.EXEMPT_DETERMINED.value, user.id, 'Authorised IRB exemption determination confirmed')
+        cert = issue_exemption_determination(db, app, user, note.strip() or None)
+        transition(db, app, AppStatus.ACTIVE.value, user.id, f'IRB exemption determination issued: {cert.certificate_no}')
+    elif determination in {'expedited', 'full_board'}:
+        db.add(IRBClassification(application_id=app.id, classification=determination, rationale=note.strip() or 'Reclassified by authorised IRB officer after exemption determination review', classified_by=user.id))
+        transition(db, app, AppStatus.AWAITING_IRB_REVIEWER.value, user.id, 'IRB review processing continues')
+    else:
+        db.add(IRBDecision(application_id=app.id, decision='clarification_required', conditions=note.strip() or None, decided_by=user.id))
+        transition(db, app, AppStatus.IRB_REVISION.value, user.id, note.strip() or 'Clarification required before IRB determination can be completed')
+    audit(db, user.id, 'authorised_exempt_determination', app.id, determination)
     db.commit()
     return RedirectResponse(f'/applications/{app.id}', status_code=303)
 
@@ -2302,6 +2388,9 @@ def final_irb_decision(
     user = require_user(request, db)
     require_roles(user, Role.IRB_CHAIR.value, Role.SUPERADMIN.value)
     app = get_app_or_404(db, app_id)
+    latest = latest_classification(db, app.id)
+    if latest and latest.classification == 'exempt' and app.status in {AppStatus.EXEMPT_DETERMINATION_PENDING.value, AppStatus.AWAITING_FINAL_DECISION.value}:
+        return prerequisite_redirect(app.id, 'Complete the authorised exempt determination before any final action.', 'exempt-determination')
     if app.status not in {AppStatus.AWAITING_FINAL_DECISION.value, AppStatus.FULL_BOARD.value, AppStatus.DEFERRED.value}:
         return prerequisite_redirect(app.id, 'Complete the required IRB review stage before recording the final IRB decision.', 'irb-prerequisite')
     if decision not in {'approved', 'approved_conditions', 'deferred', 'rejected'}:
@@ -2324,10 +2413,12 @@ def final_irb_decision(
         )
     )
     if decision in {'approved', 'approved_conditions'}:
-        transition(db, app, AppStatus.APPROVED_CONDITIONS.value if decision == 'approved_conditions' else AppStatus.APPROVED.value, user.id, conditions or 'IRB approval granted')
-        issue_clearance(db, app, user, conditions.strip() or None)
-        transition(db, app, AppStatus.CLEARANCE_ISSUED.value, user.id, 'Ethical clearance certificate issued')
-        transition(db, app, AppStatus.ACTIVE.value, user.id, 'Study approval is active')
+        approval_status = AppStatus.FINAL_APPROVAL_CONDITIONS.value if decision == 'approved_conditions' else AppStatus.FINAL_APPROVAL.value
+        approval_note = conditions.strip() if decision == 'approved_conditions' else 'Final IRB approval granted'
+        transition(db, app, approval_status, user.id, approval_note)
+        cert = issue_clearance(db, app, user, conditions.strip() or None)
+        transition(db, app, AppStatus.CLEARANCE_ISSUED.value, user.id, f'Ethics approval certificate issued: {cert.certificate_no}')
+        transition(db, app, AppStatus.ACTIVE.value, user.id, 'Final IRB approval is active')
     elif decision == 'deferred':
         transition(db, app, AppStatus.DEFERRED.value, user.id, conditions or 'IRB decision deferred')
     else:
