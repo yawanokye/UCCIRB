@@ -40,7 +40,7 @@ def _qr_image(token: str) -> Image:
     return Image(buf, width=31*mm, height=31*mm)
 
 
-def generate_certificate_pdf(certificate, application) -> str:
+def generate_certificate_pdf(certificate, application, document_kind: str = 'ethical_clearance') -> str:
     stored_name = f'{certificate.certificate_no.replace("/", "-")}.pdf'
     out = certificate_path(stored_name)
     page_width, page_height = landscape(A4)
@@ -68,12 +68,16 @@ def generate_certificate_pdf(certificate, application) -> str:
         story.append(Spacer(1, 4*mm))
 
     story.append(Paragraph('INSTITUTIONAL REVIEW BOARD', title))
-    story.append(Paragraph('ETHICAL CLEARANCE CERTIFICATE', subtitle))
-    story.append(Paragraph('This is to certify that the research protocol stated below has completed the University of Cape Coast ethical review process and has been granted ethical clearance subject to the conditions recorded in the approval decision.', body))
+    if document_kind == 'exemption':
+        story.append(Paragraph('EXEMPTION DETERMINATION', subtitle))
+        story.append(Paragraph('This document confirms the authorised UCC Institutional Review Board determination that the research protocol stated below meets the applicable criteria for an exempt determination. It is not an Ethical Clearance Certificate for a protocol requiring expedited or Full Board approval.', body))
+    else:
+        story.append(Paragraph('ETHICS APPROVAL CERTIFICATE', subtitle))
+        story.append(Paragraph('This is to certify that the research protocol stated below has completed the University of Cape Coast ethical review process and has received final IRB approval, subject to any conditions recorded in the approval decision.', body))
     story.append(Spacer(1, 7*mm))
 
     rows = [
-        [Paragraph('Clearance Number', label), Paragraph(certificate.certificate_no, value)],
+        [Paragraph('Determination Number' if document_kind == 'exemption' else 'Ethics Certificate Number', label), Paragraph(certificate.certificate_no, value)],
         [Paragraph('Protocol/Application Number', label), Paragraph(application.reference_no or '—', value)],
         [Paragraph('Researcher', label), Paragraph(application.applicant.full_name, value)],
         [Paragraph('College / UCC Unit', label), Paragraph((application.department or 'Other UCC Academic/Administrative Unit') if is_direct_irb_affiliation(application.college) else application.college.name, value)],
@@ -95,7 +99,7 @@ def generate_certificate_pdf(certificate, application) -> str:
 
     qr = _qr_image(certificate.verification_token)
     verify_text = Paragraph(
-        '<b>Certificate verification</b><br/>Scan the QR code or use the public verification page. The portal displays only limited non-sensitive approval information.',
+        '<b>Online verification</b><br/>Scan the QR code or use the public verification page to confirm this UCC IRB record. Only limited non-sensitive information is displayed.',
         fine,
     )
     lower = Table([[tbl, Table([[qr], [verify_text]], colWidths=[42*mm])]], colWidths=[203*mm, 47*mm])
