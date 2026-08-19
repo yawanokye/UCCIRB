@@ -511,7 +511,7 @@
 {% if certificates %}
 <section class="card">
   <h2>IRB certificates and determinations</h2>
-  <table><thead><tr><th>Certificate</th><th>Issued</th><th>Expiry</th><th>Status</th><th></th></tr></thead><tbody>{% for c in certificates %}<tr><td>{{ c.certificate_no }}</td><td>{{ c.issue_date.strftime('%d %b %Y') }}</td><td>{{ c.expiry_date.strftime('%d %b %Y') }}</td><td><span class="status {{ c.status }}">{{ c.status.title() }}</span></td><td><div class="actions"><a class="btn secondary smallbtn" href="/certificates/{{ c.id }}/download">Download PDF</a><a class="btn secondary smallbtn" href="/verify/{{ c.verification_token }}" target="_blank">Verify</a></div></td></tr>{% endfor %}</tbody></table>
+  <table><thead><tr><th>Certificate</th><th>Issued</th><th>Expiry</th><th>Status</th><th></th></tr></thead><tbody>{% for c in certificates %}<tr><td>{{ c.certificate_no }}</td><td>{{ c.issue_date.strftime('%d %b %Y') }}</td><td>{{ c.expiry_date.strftime('%d %b %Y') }}</td><td><span class="status {{ c.status }}">{{ c.status.title() }}</span></td><td><div class="actions"><a class="btn secondary smallbtn" href="/certificates/{{ c.id }}/download">Download PDF</a><a class="btn secondary smallbtn" href="/verify/{{ c.verification_token }}" target="_blank">Verify</a>{% if user.role in ['irb_secretariat','irb_chair','superadmin'] %}<form method="post" action="/certificates/{{ c.id }}/regenerate" style="display:inline"><button class="btn secondary smallbtn" type="submit">Regenerate Certificate / QR</button></form>{% endif %}</div></td></tr>{% endfor %}</tbody></table>
 </section>
 {% endif %}
 
