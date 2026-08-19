@@ -12,11 +12,11 @@ from .config import (ALLOWED_HOSTS, APP_NAME, BASE_DIR, BOOTSTRAP_ADMIN_EMAIL, B
                      SESSION_MAX_AGE_SECONDS, STORAGE_DIR)
 from .database import Base, SessionLocal, engine
 from .routers import auth, portal
-from .models import (AppStatus, ApplicationDocument, College, CollegeAccessRequest, EthicsApplication, ReviewReportDocument, ReviewReportFileBlob, ReviewerAssignment, Role, User)
+from .models import (AppStatus, ApplicationDocument, College, CollegeAccessRequest, EthicsApplication, IRBClassification, ReviewReportDocument, ReviewReportFileBlob, ReviewerAssignment, Role, StatusHistory, User)
 from .services.auth import hash_password
 from .services.routing import ensure_routing_units, is_scientific_committee_college
 from .security import csrf_protect, request_rate_limit, security_headers
-from .services.workflow import status_label
+from .services.workflow import applicant_status_label, status_label
 from sqlalchemy import select
 
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -132,6 +132,36 @@ def backfill_review_report_blobs():
 
 backfill_review_report_blobs()
 
+
+def migrate_v23_exempt_pending_state():
+    """Repair V22 exempt cases that were stored under the generic final-decision state."""
+    with SessionLocal() as db:
+        apps = db.scalars(select(EthicsApplication).where(EthicsApplication.status == AppStatus.AWAITING_FINAL_DECISION.value)).all()
+        changed = False
+        for application in apps:
+            latest = db.scalar(
+                select(IRBClassification)
+                .where(IRBClassification.application_id == application.id)
+                .order_by(IRBClassification.classified_at.desc())
+            )
+            if not latest or latest.classification != 'exempt':
+                continue
+            application.status = AppStatus.EXEMPT_DETERMINATION_PENDING.value
+            histories = db.scalars(select(StatusHistory).where(
+                StatusHistory.application_id == application.id,
+                StatusHistory.to_status == AppStatus.AWAITING_FINAL_DECISION.value,
+            )).all()
+            for history in histories:
+                if history.note and 'exempt determination' in history.note.lower():
+                    history.to_status = AppStatus.EXEMPT_DETERMINATION_PENDING.value
+                    history.note = 'Awaiting authorised IRB exemption determination'
+            changed = True
+        if changed:
+            db.commit()
+
+
+migrate_v23_exempt_pending_state()
+
 api_docs = {} if ENABLE_API_DOCS else {'docs_url': None, 'redoc_url': None, 'openapi_url': None}
 app = FastAPI(title=APP_NAME, dependencies=[Depends(csrf_protect)], **api_docs)
 
@@ -153,10 +183,11 @@ app.middleware('http')(security_headers)
 app.mount('/static', StaticFiles(directory=BASE_DIR / 'app' / 'static'), name='static')
 app.state.templates = Jinja2Templates(directory=BASE_DIR / 'app' / 'templates')
 app.state.templates.env.globals['status_label'] = status_label
+app.state.templates.env.globals['applicant_status_label'] = applicant_status_label
 app.include_router(auth.router)
 app.include_router(portal.router)
 
-BUILD_ID = '2026-08-18-google-verification-v21'
+BUILD_ID = '2026-08-19-final-irb-approval-v23'
 
 
 @app.exception_handler(HTTPException)
@@ -228,4 +259,12 @@ def healthz():
         'reviewer_assessment_form': 'ucc-irb-research-ethics-reviewer-assessment-form.docx',
         'secure_reviewer_form_csrf': 'stateless-hmac-bound-to-review-link-v2',
         'secure_reviewer_security_error_redirect': True,
+        'safe_browsing_identity_disclosure': True,
+        'public_service_verification_page': True,
+        'official_ucc_irb_reference': 'https://irb.ucc.edu.gh/',
+        'irb_review_branches': ['exempt_determination', 'expedited_review', 'full_board_review'],
+        'final_irb_approval_path': True,
+        'ethics_certificate_qr_verification': True,
+        'public_certificate_number_lookup': True,
+        'applicant_internal_irb_classification_hidden': True,
     })
