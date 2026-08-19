@@ -57,7 +57,7 @@
     {% if user.role == 'superadmin' %}<a href="/system-admin">System Administration</a>{% else %}<a href="/dashboard">Dashboard</a>{% endif %}
     {% if user.role == 'applicant' %}<a href="/applications/new">New Application</a><a href="/applicant-guide">Applicant Guide & Resources</a>{% endif %}
     {% if user.role == 'college_admin' %}<a href="/college/review-queue">Review Assignments</a>{% endif %}
-    {% if user.role in ['irb_secretariat','irb_chair'] %}<a href="/irb/review-queue">Review Assignments</a><a href="/irb/meetings">IRB Meetings</a><a href="/secretariat/approved-register">Approved Works Register</a>{% elif user.role == 'irb_member' %}<a href="/irb/meetings">Board Meetings</a>{% endif %}
+    {% if user.role in ['irb_secretariat','irb_chair'] %}<a href="/irb/review-queue">Review Assignments</a><a href="/irb/board-review">Board Review</a><a href="/secretariat/approved-register">Approved Works Register</a><a href="/secretariat/final-approval-register">Final Approval Register</a>{% elif user.role == 'irb_member' %}<a href="/irb/board-review">Board Review</a>{% endif %}
     <a href="/account/password">Change Password</a>
   </div>
 </nav>

@@ -28,12 +28,10 @@
   {% set ns.show=true %}{% set ns.title='Record Authorised Exempt Determination' %}{% set ns.note='An Exempt pathway has been designated. Record the authorised IRB determination or reclassify the application.' %}{% set ns.href='#exempt-determination' %}{% set ns.label='Act on Exempt Determination' %}{% set ns.tone='goldline' %}
 {% elif user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status in ['awaiting_irb_reviewer_assignment','under_irb_ethical_review','irb_revised_submission_received'] %}
   {% set ns.show=true %}{% set ns.title='Continue IRB Ethical Review' %}{% set ns.note='The application is in the IRB reviewer pathway. Assign or monitor the required ethical review.' %}{% set ns.href='/irb/review-queue' %}{% set ns.label='Open IRB Review Queue' %}
-{% elif user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status == 'ethical_approval_pending_board_ratification' and not meeting_items %}
-  {% set ns.show=true %}{% set ns.title='Schedule Board Ratification' %}{% set ns.note='Ethical approval has been granted pending formal Board ratification. Add this application to the next IRB Board meeting agenda.' %}{% set ns.href='/irb/meetings' %}{% set ns.label='Schedule for Ratification' %}{% set ns.tone='redline' %}
-{% elif user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status == 'ethical_approval_pending_board_ratification' and meeting_items %}
-  {% set ns.show=true %}{% set ns.title='Record Board Ratification' %}{% set ns.note='The application is on an IRB Board agenda. Record the Board review and ratification outcome.' %}{% set ns.href='#board-ratification' %}{% set ns.label='Record Ratification' %}{% set ns.tone='redline' %}
-{% elif user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status == 'scheduled_for_full_board_review' and not meeting_items %}
-  {% set ns.show=true %}{% set ns.title='Schedule Full Board Consideration' %}{% set ns.note='This application requires Full Board consideration and must be placed on an IRB meeting agenda before the final decision is recorded.' %}{% set ns.href='/irb/meetings' %}{% set ns.label='Open IRB Meetings' %}{% set ns.tone='redline' %}
+{% elif user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status == 'ethical_approval_pending_board_ratification' %}
+  {% set ns.show=true %}{% set ns.title='Record Board Ratification' %}{% set ns.note='Ethical approval is active pending Board ratification. Record the Board outcome when it becomes available. Meeting scheduling is handled outside this portal.' %}{% set ns.href='#board-ratification' %}{% set ns.label='Record Ratification' %}{% set ns.tone='redline' %}
+{% elif user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status == 'scheduled_for_full_board_review' %}
+  {% set ns.show=true %}{% set ns.title='Record Full Board Decision' %}{% set ns.note='This application requires Full Board consideration. Board members may review the record in the Board Review queue. Record the authorised Board decision when available.' %}{% set ns.href='#final-decision' %}{% set ns.label='Open Final Approval' %}{% set ns.tone='redline' %}
 {% elif user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status in ['awaiting_final_irb_decision','scheduled_for_full_board_review','deferred'] %}
   {% set ns.show=true %}{% set ns.title='Record Final IRB Approval / Decision' %}{% set ns.note='The application has reached the final IRB authorisation stage. Record the authorised Board/Chair decision.' %}{% set ns.href='#final-decision' %}{% set ns.label='Open Final Approval' %}{% set ns.tone='redline' %}
 {% endif %}
@@ -452,33 +450,26 @@
 </section>
 {% endif %}
 
-{% if app.status == 'scheduled_for_full_board_review' and user.role in ['irb_secretariat','irb_chair','superadmin'] %}
+{% if app.status == 'scheduled_for_full_board_review' and user.role in ['irb_secretariat','irb_chair','superadmin','irb_member'] %}
 <section class="card actioncard redline">
   <h2>Full Board consideration</h2>
-  {% if meeting_items %}
-    <p>This application is currently listed on:</p>
-    <ul>{% for item in meeting_items %}<li><a href="/irb/meetings/{{ item.meeting.id }}">{{ item.meeting.meeting_no }}</a> · {{ item.meeting.meeting_date.strftime('%d %b %Y %H:%M') }}{% if item.agenda_no %} · Agenda {{ item.agenda_no }}{% endif %}</li>{% endfor %}</ul>
-  {% else %}<div class="alert warning">The application requires Full Board review but has not yet been placed on an IRB meeting agenda. <a href="/irb/meetings">Schedule it from IRB Meetings</a>.</div>{% endif %}
+  <p>This application requires consideration by the IRB Board. The portal does not schedule Board meetings. Board members may review the application documents, College recommendation and reviewer reports here. An authorised officer records the Board decision when it is communicated.</p>
 </section>
 {% endif %}
 
 {% if user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status == 'ethical_approval_pending_board_ratification' %}
 <section class="card actioncard redline {% if required_target == 'board-ratification' %}required-highlight{% endif %}" id="board-ratification">
   <h2>IRB Board Review and Ratification</h2>
-  <p>The application already has ethical approval pending Board ratification. The Board may review the College Scientific Committee recommendation and reviewer report, then ratify, vary the conditions, defer, or revoke the approval. The officer recording the Board outcome is retained in the audit trail.</p>
-  {% if meeting_items %}
+  <p>The application already has ethical approval pending Board ratification. Meeting scheduling is handled outside the portal. When the Board outcome is communicated, record it here together with the authorised officer and any Board reference.</p>
   <form method="post" action="/irb/{{ app.id }}/ratification">
     <div class="formgrid">
-      <label>IRB Board meeting<select name="meeting_id" required>{% for item in meeting_items %}<option value="{{ item.meeting.id }}">{{ item.meeting.meeting_no }} · {{ item.meeting.meeting_date.strftime('%d %b %Y') }}</option>{% endfor %}</select></label>
       <label>Board decision<select name="decision" required><option value="ratify">Ratify Ethical Approval</option><option value="ratify_conditions">Ratify with Additional/Modified Conditions</option><option value="defer">Defer Ratification</option><option value="revoke">Do Not Ratify / Revoke Approval</option></select></label>
-      <label>Authorised officer recording Board outcome<select name="ratifying_officer_id" required><option value="">Select officer</option>{% for officer in approval_officers %}<option value="{{ officer.id }}">{{ officer.full_name }} · {{ officer.role.replace('_',' ').title() }}</option>{% endfor %}</select></label>
+      <label>Officer who gave / confirmed final Board approval<select name="ratifying_officer_id" required><option value="">Select officer</option>{% for officer in approval_officers %}<option value="{{ officer.id }}">{{ officer.full_name }} · {{ officer.role.replace('_',' ').title() }}</option>{% endfor %}</select></label>
+      <label>Board reference / minute number <span class="optional">optional</span><input name="board_reference" placeholder="e.g. UCC-IRB/BOARD/2026/08"></label>
       <label class="wide">Board comments / conditions<textarea name="note" rows="5" placeholder="Record the Board's decision, conditions or reason for deferral/revocation."></textarea></label>
     </div>
     <button class="btn red" type="submit">Record Board Ratification Decision</button>
   </form>
-  {% else %}
-    <div class="alert warning"><strong>Board meeting required.</strong> Add this approval to an IRB meeting agenda before ratification is recorded. <a href="/irb/meetings">Open IRB Meetings</a>.</div>
-  {% endif %}
 </section>
 {% endif %}
 
@@ -495,7 +486,7 @@
       </select></label>
       <label>Decision<select name="decision" required><option value="approved">Approved</option><option value="approved_conditions">Approved with Conditions</option><option value="deferred">Deferred</option><option value="rejected">Rejected</option></select></label>
       <label>Officer who reviewed and approved<select name="approving_officer_id" required><option value="">Select authorised officer</option>{% for officer in approval_officers %}<option value="{{ officer.id }}">{{ officer.full_name }} · {{ officer.role.replace('_',' ').title() }}</option>{% endfor %}</select></label>
-      <label>IRB meeting {% if app.status == 'scheduled_for_full_board_review' %}<span class="urgent">required</span>{% else %}<span class="optional">optional</span>{% endif %}<select name="meeting_id"><option value="">No meeting / Chair determination</option>{% for m in meetings %}<option value="{{ m.id }}">{{ m.meeting_no }} · {{ m.meeting_date.strftime('%d %b %Y') }}</option>{% endfor %}</select></label>
+      <label>Board/decision reference <span class="optional">optional</span><input name="decision_reference" placeholder="e.g. UCC-IRB/BOARD/2026/08"></label>
       <label class="wide">Conditions / decision reasons<textarea name="conditions" rows="5" placeholder="Record approval conditions, reasons for deferral, or reasons for rejection."></textarea></label>
     </div>
     <button class="btn red" type="submit">Record Final Approval / Decision</button>
@@ -513,7 +504,7 @@
 {% if approval_records and user.role in ['irb_secretariat','irb_chair','superadmin'] %}
 <section class="card">
   <h2>Ethical approval and Board ratification record</h2>
-  <table><thead><tr><th>Approved</th><th>Approval type</th><th>Status</th><th>Approving officer</th><th>Board meeting</th><th>Ratification</th></tr></thead><tbody>{% for r in approval_records %}<tr><td>{{ r.approved_at.strftime('%d %b %Y') }}</td><td>{{ r.approval_type.replace('_',' ').title() }}</td><td>{{ r.status.replace('_',' ').title() }}</td><td>{{ r.approving_officer.full_name if r.approving_officer else '—' }}</td><td>{{ r.ratification_meeting.meeting_no if r.ratification_meeting else 'Pending' }}</td><td>{{ r.ratification_decision.replace('_',' ').title() if r.ratification_decision else 'Pending' }}</td></tr>{% endfor %}</tbody></table>
+  <table><thead><tr><th>Conditional / Initial Approval Date</th><th>Approval type</th><th>Status</th><th>Conditional / Initial Approval By</th><th>Final Approval / Ratification By</th><th>Final Approval Date</th><th>Board outcome</th></tr></thead><tbody>{% for r in approval_records %}<tr><td>{{ r.approved_at.strftime('%d %b %Y') }}</td><td>{{ r.approval_type.replace('_',' ').title() }}</td><td>{{ r.status.replace('_',' ').title() }}</td><td>{{ r.approving_officer.full_name if r.approving_officer else '—' }}</td><td>{{ r.ratifying_officer.full_name if r.ratifying_officer else (r.approving_officer.full_name if r.approval_type == 'final_irb' and r.approving_officer else 'Pending') }}</td><td>{{ r.ratified_at.strftime('%d %b %Y') if r.ratified_at else (r.approved_at.strftime('%d %b %Y') if r.approval_type == 'final_irb' else 'Pending') }}</td><td>{{ r.ratification_decision.replace('_',' ').title() if r.ratification_decision else ('Final IRB approval' if r.approval_type == 'final_irb' else 'Pending ratification') }}</td></tr>{% endfor %}</tbody></table>
 </section>
 {% endif %}
 

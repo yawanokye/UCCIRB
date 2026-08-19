@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}Approved Works Register · UCC IRB Ethical Clearance Portal{% endblock %}
 {% block content %}
-<div class="pagehead"><div><span class="eyebrow">IRB governance register</span><h1>Approved Works Register</h1><p>Register of ethical approvals, including approvals pending Board ratification and ratified/final approvals.</p></div><div class="actions"><a class="btn secondary" href="/dashboard">IRB Dashboard</a><a class="btn" href="/secretariat/approved-register?college={{ selected_college }}&status={{ selected_status }}&q={{ q|urlencode }}&export=csv">Export CSV</a></div></div>
+<div class="pagehead"><div><span class="eyebrow">IRB governance register</span><h1>Approved Works Register</h1><p>Register of ethical approvals, including approvals pending Board ratification and final approvals. Meeting scheduling is not managed in this portal.</p></div><div class="actions"><a class="btn secondary" href="/dashboard">IRB Dashboard</a><a class="btn secondary" href="/secretariat/final-approval-register">Final Approval Register</a><a class="btn" href="/secretariat/approved-register?college={{ selected_college }}&status={{ selected_status }}&q={{ q|urlencode }}&export=csv">Export CSV</a></div></div>
 <section class="card approval-register">
   <form method="get" action="/secretariat/approved-register" class="filterbar">
     <label>College / route<select name="college"><option value="">All</option>{% for c in colleges %}<option value="{{ c.code }}" {% if selected_college==c.code %}selected{% endif %}>{{ c.name }}</option>{% endfor %}<option value="IRB-DIRECT" {% if selected_college=='IRB-DIRECT' %}selected{% endif %}>Other UCC Academic/Administrative Units</option></select></label>
@@ -10,10 +10,10 @@
     <button class="btn" type="submit">Apply</button>
   </form>
   <div class="tablewrap">
-  <table><thead><tr><th>No.</th><th>Applicant</th><th>College / UCC Unit</th><th>Title of Work</th><th>College Scientific Reviewer</th><th>Officer Who Reviewed & Approved</th><th>Approval Date</th><th>Status</th><th>Board Ratification</th><th>Certificate</th></tr></thead><tbody>
+  <table><thead><tr><th>No.</th><th>Applicant</th><th>College / UCC Unit</th><th>Title of Work</th><th>College Scientific Reviewer</th><th>Conditional / Initial Approval By</th><th>Conditional / Initial Approval Date</th><th>Final Approval / Ratification By</th><th>Final Approval Date</th><th>Status</th><th>Certificate</th></tr></thead><tbody>
     {% for row in rows %}{% set r=row.record %}{% set a=row.application %}{% set c=row.certificate %}
-    <tr><td>{{ loop.index }}</td><td><a href="/applications/{{ a.id }}">{{ a.applicant.full_name }}</a><br><small>{{ a.reference_no }}</small></td><td>{{ row.affiliation }}</td><td>{{ a.title }}</td><td>{{ row.college_reviewer }}</td><td>{{ row.approving_officer }}</td><td>{{ r.approved_at.strftime('%d %b %Y') }}</td><td><span class="status {{ r.status }}">{{ r.status.replace('_',' ').title() }}</span></td><td>{% if r.ratification_meeting %}{{ r.ratification_meeting.meeting_no }}<br><small>{{ r.ratification_decision.replace('_',' ').title() if r.ratification_decision else 'Recorded' }}</small>{% else %}Pending{% endif %}</td><td class="certificate-link">{% if c %}<a href="/certificates/{{ c.id }}/download">{{ c.certificate_no }}</a><br><a href="/verify/{{ c.verification_token }}" target="_blank">Verify QR record</a>{% else %}—{% endif %}</td></tr>
-    {% else %}<tr><td colspan="10" class="empty">No approved works match the selected filters.</td></tr>{% endfor %}
+    <tr><td>{{ loop.index }}</td><td><a href="/applications/{{ a.id }}">{{ a.applicant.full_name }}</a><br><small>{{ a.reference_no }}</small></td><td>{{ row.affiliation }}</td><td>{{ a.title }}</td><td>{{ row.college_reviewer }}</td><td>{{ row.conditional_approver }}</td><td>{{ row.conditional_date }}</td><td>{{ row.final_approver }}</td><td>{{ row.final_date }}</td><td><span class="status {{ r.status }}">{{ r.status.replace('_',' ').title() }}</span></td><td class="certificate-link">{% if c %}<a href="/certificates/{{ c.id }}/download">{{ c.certificate_no }}</a><br><a href="/verify/{{ c.verification_token }}" target="_blank">Verify QR record</a>{% else %}—{% endif %}</td></tr>
+    {% else %}<tr><td colspan="11" class="empty">No approved works match the selected filters.</td></tr>{% endfor %}
   </tbody></table></div>
 </section>
 {% endblock %}
