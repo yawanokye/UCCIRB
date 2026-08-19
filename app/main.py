@@ -217,7 +217,7 @@ app.state.templates.env.globals['applicant_status_label'] = applicant_status_lab
 app.include_router(auth.router)
 app.include_router(portal.router)
 
-BUILD_ID = '2026-08-19-college-admin-approval-ratification-v25'
+BUILD_ID = '2026-08-19-board-review-no-scheduling-v26'
 
 
 @app.exception_handler(HTTPException)
@@ -304,6 +304,12 @@ def healthz():
         'irb_processing_reset_correction': True,
         'conditional_ethics_approval_pending_board_ratification': True,
         'board_ratification_workflow': True,
+        'board_meeting_scheduling_in_workflow': False,
+        'board_review_queue': True,
+        'conditional_approver_recorded': True,
+        'final_approver_recorded': True,
         'approved_works_register': True,
         'approved_works_register_csv': True,
+        'final_approval_register': True,
+        'final_approval_register_csv': True,
     })
