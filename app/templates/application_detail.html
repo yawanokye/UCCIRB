@@ -10,6 +10,32 @@
   <span class="status big {{ app.status }}">{{ applicant_status_label(app.status) if user.id == app.applicant_id else status_label(app.status) }}</span>
 </div>
 
+{% if user.role in ['irb_secretariat','irb_chair','superadmin','college_admin'] %}
+{% set ns = namespace(show=false, title='', note='', href='', label='', tone='navyline') %}
+{% if user.role == 'college_admin' and app.status in ['forwarded_to_college_scientific_committee','awaiting_college_reviewer_assignment'] %}
+  {% set ns.show=true %}{% set ns.title='Assign Scientific Review' %}{% set ns.note='This application is ready for College Scientific Committee reviewer assignment.' %}{% set ns.href='/college/review-queue' %}{% set ns.label='Open College Review Queue' %}
+{% elif user.role == 'college_admin' and app.status == 'college_revised_submission_received' %}
+  {% set ns.show=true %}{% set ns.title='Act on Revised Submission' %}{% set ns.note='Choose whether to resubmit the revision to a previous/new reviewer or complete an administrative review.' %}{% set ns.href='#revision-disposition' %}{% set ns.label='Review Revised Submission' %}{% set ns.tone='goldline' %}
+{% elif user.role == 'college_admin' and app.status == 'awaiting_college_decision' %}
+  {% set ns.show=true %}{% set ns.title='Record College Scientific Committee Decision' %}{% set ns.note='Scientific review is complete. Record the Committee decision to move the application to the IRB.' %}{% set ns.href='#college-decision' %}{% set ns.label='Record College Decision' %}{% set ns.tone='redline' %}
+{% elif user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status in ['returned_to_irb_secretariat','direct_irb_secretariat_pathway','irb_review_classification'] %}
+  {% set ns.show=true %}{% set ns.title='Classify IRB Review Pathway' %}{% set ns.note='The scientific/administrative prerequisite is complete. Select Exempt Determination, Expedited Review or Full Board Review.' %}{% set ns.href='#irb-prerequisite' %}{% set ns.label='Continue to IRB Classification' %}
+{% elif user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status == 'exempt_determination_pending' %}
+  {% set ns.show=true %}{% set ns.title='Record Authorised Exempt Determination' %}{% set ns.note='An Exempt pathway has been designated. Record the authorised IRB determination or reclassify the application.' %}{% set ns.href='#exempt-determination' %}{% set ns.label='Act on Exempt Determination' %}{% set ns.tone='goldline' %}
+{% elif user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status in ['awaiting_irb_reviewer_assignment','under_irb_ethical_review','irb_revised_submission_received'] %}
+  {% set ns.show=true %}{% set ns.title='Continue IRB Ethical Review' %}{% set ns.note='The application is in the IRB reviewer pathway. Assign or monitor the required ethical review.' %}{% set ns.href='/irb/review-queue' %}{% set ns.label='Open IRB Review Queue' %}
+{% elif user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status == 'scheduled_for_full_board_review' and not meeting_items %}
+  {% set ns.show=true %}{% set ns.title='Schedule Full Board Consideration' %}{% set ns.note='This application requires Full Board consideration and must be placed on an IRB meeting agenda before the final decision is recorded.' %}{% set ns.href='/irb/meetings' %}{% set ns.label='Open IRB Meetings' %}{% set ns.tone='redline' %}
+{% elif user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status in ['awaiting_final_irb_decision','scheduled_for_full_board_review','deferred'] %}
+  {% set ns.show=true %}{% set ns.title='Record Final IRB Approval / Decision' %}{% set ns.note='The application has reached the final IRB authorisation stage. Record the authorised Board/Chair decision.' %}{% set ns.href='#final-decision' %}{% set ns.label='Open Final Approval' %}{% set ns.tone='redline' %}
+{% endif %}
+{% if ns.show %}
+<section class="card actioncard next-required-action {{ ns.tone }}" id="next-required-action">
+  <div class="next-action-grid"><div><span class="eyebrow">Next required action</span><h2>{{ ns.title }}</h2><p>{{ ns.note }}</p></div><div class="next-action-button"><a class="btn{% if ns.tone == 'redline' %} red{% elif ns.tone == 'goldline' %} secondary{% endif %}" href="{{ ns.href }}">{{ ns.label }}</a></div></div>
+</section>
+{% endif %}
+{% endif %}
+
 {% if required_message %}<div class="alert danger prerequisite-alert" id="prerequisite-alert"><strong>Required before you continue:</strong> {{ required_message }}</div>{% endif %}
 
 <section class="card application-record-card">
@@ -311,7 +337,7 @@
 {% endif %}
 
 {% if user.role == 'college_admin' and app.status == 'awaiting_college_decision' %}
-<section class="card actioncard {% if required_target == 'review-prerequisite' %}required-highlight{% endif %}" id="review-prerequisite">
+<section class="card actioncard {% if required_target == 'review-prerequisite' %}required-highlight{% endif %}" id="college-decision">
   <h2>College Scientific Committee decision</h2>
   <form method="post" action="/college/{{ app.id }}/decision">
     <div class="formgrid">
@@ -350,12 +376,18 @@
 </section>
 {% endif %}
 
-{% if user.role in ['irb_chair','superadmin'] and app.status in ['exempt_determination_pending'] %}
+{% if user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status in ['exempt_determination_pending'] %}
 <section class="card actioncard goldline {% if required_target == 'exempt-determination' %}required-highlight{% endif %}" id="exempt-determination">
   <h2>Authorised Exempt Determination</h2>
-  <p>The Secretariat classification is an internal screening step. The authorised IRB officer must make the determination. Confirming Exempt generates a separate QR-verifiable exemption determination, not the normal ethics approval certificate.</p>
+  <p>This form records an <strong>authorised IRB determination</strong>. A Secretariat officer may record the decision on behalf of the named approving authority, but the Secretariat does not independently confer exempt status. Confirming Exempt generates a separate QR-verifiable exemption determination.</p>
   <form method="post" action="/irb/{{ app.id }}/exempt-determination">
     <div class="formgrid">
+      <label>Approving authority<select name="authority" required>
+        <option value="">Select authority</option>
+        <option value="IRB Chairperson">IRB Chairperson</option>
+        <option value="IRB Board">IRB Board</option>
+        <option value="Authorised IRB Officer">Authorised IRB Officer</option>
+      </select></label>
       <label>Determination<select name="determination" required>
         <option value="">Select determination</option>
         <option value="confirm_exempt">Confirm Exempt Determination</option>
@@ -388,12 +420,17 @@
 </section>
 {% endif %}
 
-{% if user.role in ['irb_chair','superadmin'] and app.status in ['awaiting_final_irb_decision','scheduled_for_full_board_review','deferred'] %}
+{% if user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status in ['awaiting_final_irb_decision','scheduled_for_full_board_review','deferred'] %}
 <section class="card actioncard redline {% if required_target == 'final-decision' %}required-highlight{% endif %}" id="final-decision">
   <h2>Final IRB Approval / Decision</h2>
-  <p>This is the final authorisation stage. Only the IRB Chairperson or an authorised system-level authority can grant final approval. An approval automatically generates a QR-verifiable UCC IRB Ethics Approval Certificate.</p>
+  <p>This form records the <strong>authorised final IRB decision</strong>. A Secretariat officer may enter the decision on behalf of the IRB Board or Chairperson. The logged-in officer and selected approving authority are retained in the audit trail. Approval automatically generates a QR-verifiable UCC IRB Ethics Approval Certificate.</p>
   <form method="post" action="/irb/{{ app.id }}/decision">
     <div class="formgrid">
+      <label>Approving authority<select name="authority" required>
+        <option value="">Select authority</option>
+        <option value="IRB Board">IRB Board</option>
+        <option value="IRB Chairperson">IRB Chairperson</option>
+      </select></label>
       <label>Decision<select name="decision" required><option value="approved">Approved</option><option value="approved_conditions">Approved with Conditions</option><option value="deferred">Deferred</option><option value="rejected">Rejected</option></select></label>
       <label>IRB meeting {% if app.status == 'scheduled_for_full_board_review' %}<span class="urgent">required</span>{% else %}<span class="optional">optional</span>{% endif %}<select name="meeting_id"><option value="">No meeting / Chair determination</option>{% for m in meetings %}<option value="{{ m.id }}">{{ m.meeting_no }} · {{ m.meeting_date.strftime('%d %b %Y') }}</option>{% endfor %}</select></label>
       <label class="wide">Conditions / decision reasons<textarea name="conditions" rows="5" placeholder="Record approval conditions, reasons for deferral, or reasons for rejection."></textarea></label>
