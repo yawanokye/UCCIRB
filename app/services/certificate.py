@@ -71,6 +71,9 @@ def generate_certificate_pdf(certificate, application, document_kind: str = 'eth
     if document_kind == 'exemption':
         story.append(Paragraph('EXEMPTION DETERMINATION', subtitle))
         story.append(Paragraph('This document confirms the authorised UCC Institutional Review Board determination that the research protocol stated below meets the applicable criteria for an exempt determination. It is not an Ethical Clearance Certificate for a protocol requiring expedited or Full Board approval.', body))
+    elif document_kind == 'conditional_clearance':
+        story.append(Paragraph('ETHICS APPROVAL CERTIFICATE', subtitle))
+        story.append(Paragraph('<b>APPROVED PENDING IRB BOARD RATIFICATION.</b> Based on the completed College Scientific Committee review and authorised IRB administrative review, this protocol has ethical approval subject to formal ratification by the UCC Institutional Review Board. The Board may ratify, vary the conditions, defer, suspend or revoke this approval.', body))
     else:
         story.append(Paragraph('ETHICS APPROVAL CERTIFICATE', subtitle))
         story.append(Paragraph('This is to certify that the research protocol stated below has completed the University of Cape Coast ethical review process and has received final IRB approval, subject to any conditions recorded in the approval decision.', body))
@@ -78,6 +81,7 @@ def generate_certificate_pdf(certificate, application, document_kind: str = 'eth
 
     rows = [
         [Paragraph('Determination Number' if document_kind == 'exemption' else 'Ethics Certificate Number', label), Paragraph(certificate.certificate_no, value)],
+        [Paragraph('Approval Status', label), Paragraph(('Pending IRB Board Ratification' if certificate.status == 'pending_ratification' else certificate.status.replace('_', ' ').title()), value)],
         [Paragraph('Protocol/Application Number', label), Paragraph(application.reference_no or '—', value)],
         [Paragraph('Researcher', label), Paragraph(application.applicant.full_name, value)],
         [Paragraph('College / UCC Unit', label), Paragraph((application.department or 'Other UCC Academic/Administrative Unit') if is_direct_irb_affiliation(application.college) else application.college.name, value)],
