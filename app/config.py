@@ -15,7 +15,7 @@ elif DATABASE_URL.startswith("postgres://"):
 
 STORAGE_DIR = Path(os.getenv("STORAGE_DIR", str(BASE_DIR / "storage")))
 SESSION_HTTPS_ONLY = os.getenv("SESSION_HTTPS_ONLY", "false").lower() == "true"
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
+PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL") or "http://localhost:8000").rstrip("/")
 REVIEW_DUE_DAYS = int(os.getenv("REVIEW_DUE_DAYS", "14"))
 CLEARANCE_VALIDITY_DAYS = int(os.getenv("CLEARANCE_VALIDITY_DAYS", "365"))
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "25"))

@@ -276,6 +276,23 @@ class ClearanceCertificate(Base):
     application = relationship("EthicsApplication")
 
 
+class ClearanceCertificateFileBlob(Base):
+    """Durable database copy of a generated certificate PDF.
+
+    Render web-service filesystems may be ephemeral. Keeping the issued PDF in
+    PostgreSQL ensures an existing certificate remains downloadable after a
+    restart or redeploy.
+    """
+    __tablename__ = "clearance_certificate_file_blobs"
+    certificate_id: Mapped[str] = mapped_column(ForeignKey("clearance_certificates.id"), primary_key=True)
+    content: Mapped[bytes] = mapped_column(LargeBinary)
+    media_type: Mapped[str] = mapped_column(String(120), default="application/pdf")
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    certificate = relationship("ClearanceCertificate")
+
+
 class IRBProcessingReset(Base):
     """Administrative correction that restores IRB processing to a known valid point.
 

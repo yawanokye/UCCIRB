@@ -12,7 +12,7 @@ from .config import (ALLOWED_HOSTS, APP_NAME, BASE_DIR, BOOTSTRAP_ADMIN_EMAIL, B
                      SESSION_MAX_AGE_SECONDS, STORAGE_DIR)
 from .database import Base, SessionLocal, engine
 from .routers import auth, portal
-from .models import (AppStatus, ApplicationDocument, ClearanceCertificate, College, CollegeAccessRequest, EthicsApplication, EthicalApprovalRecord, IRBClassification, ReviewReportDocument, ReviewReportFileBlob, ReviewerAssignment, Role, StatusHistory, User)
+from .models import (AppStatus, ApplicationDocument, ClearanceCertificate, ClearanceCertificateFileBlob, College, CollegeAccessRequest, EthicsApplication, EthicalApprovalRecord, IRBClassification, ReviewReportDocument, ReviewReportFileBlob, ReviewerAssignment, Role, StatusHistory, User)
 from .services.auth import hash_password
 from .services.routing import ensure_routing_units, is_scientific_committee_college
 from .security import csrf_protect, request_rate_limit, security_headers
@@ -192,6 +192,40 @@ def backfill_approved_work_register():
 
 backfill_approved_work_register()
 
+def backfill_certificate_blobs():
+    """Preserve any still-available certificate PDFs in PostgreSQL.
+
+    Missing legacy PDFs are intentionally regenerated lazily on first download or
+    by the explicit Regenerate Certificate/QR action, because generation needs the
+    latest configured public URL for the QR code.
+    """
+    from .services.certificate import certificate_path
+    with SessionLocal() as db:
+        changed = False
+        for cert in db.scalars(select(ClearanceCertificate)).all():
+            if db.get(ClearanceCertificateFileBlob, cert.id):
+                continue
+            if not cert.pdf_stored_name:
+                continue
+            path = certificate_path(cert.pdf_stored_name)
+            if not path.exists():
+                continue
+            try:
+                content = path.read_bytes()
+            except OSError:
+                continue
+            if not content:
+                continue
+            db.add(ClearanceCertificateFileBlob(
+                certificate_id=cert.id, content=content, media_type='application/pdf', size_bytes=len(content)
+            ))
+            changed = True
+        if changed:
+            db.commit()
+
+
+backfill_certificate_blobs()
+
 api_docs = {} if ENABLE_API_DOCS else {'docs_url': None, 'redoc_url': None, 'openapi_url': None}
 app = FastAPI(title=APP_NAME, dependencies=[Depends(csrf_protect)], **api_docs)
 
@@ -217,7 +251,7 @@ app.state.templates.env.globals['applicant_status_label'] = applicant_status_lab
 app.include_router(auth.router)
 app.include_router(portal.router)
 
-BUILD_ID = '2026-08-19-board-review-no-scheduling-v26'
+BUILD_ID = '2026-08-19-durable-certificates-v27'
 
 
 @app.exception_handler(HTTPException)
@@ -312,4 +346,8 @@ def healthz():
         'approved_works_register_csv': True,
         'final_approval_register': True,
         'final_approval_register_csv': True,
+        'certificate_database_fallback': True,
+        'certificate_auto_regeneration': True,
+        'certificate_qr_public_url_fallback': 'PUBLIC_BASE_URL-or-RENDER_EXTERNAL_URL',
+        'certificate_manual_regenerate_action': True,
     })
