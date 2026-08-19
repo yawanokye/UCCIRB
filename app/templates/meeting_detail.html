@@ -3,17 +3,21 @@
 {% block content %}
 <div class="pagehead"><div><span class="eyebrow">IRB meeting</span><h1>{{ meeting.meeting_no }}</h1><p>{{ meeting.meeting_date.strftime('%d %B %Y %H:%M') }} · {{ meeting.venue or 'Venue not stated' }}</p>{% if meeting.meeting_link %}<p><a href="{{ meeting.meeting_link }}" target="_blank" rel="noopener">Open meeting link</a></p>{% endif %}</div><a class="btn secondary" href="/irb/meetings">All Meetings</a></div>
 <div class="grid2">
-<section class="card actioncard">
+{% if user.role != "irb_member" %}<section class="card actioncard">
   <h2>Add application to agenda</h2>
-  {% if full_board_apps %}
+  {% if agenda_candidates %}
   <form method="post" action="/irb/meetings/{{ meeting.id }}/add">
-    <label>Full Board application<select name="application_id" required>{% for a in full_board_apps %}<option value="{{ a.id }}">{{ a.reference_no }} · {{ a.title }}</option>{% endfor %}</select></label>
+    <label>Application<select name="application_id" required>{% for a in agenda_candidates %}<option value="{{ a.id }}">{{ a.reference_no }} · {% if a.status == 'ethical_approval_pending_board_ratification' %}Ratification{% else %}Full Board Review{% endif %} · {{ a.title }}</option>{% endfor %}</select></label>
     <label>Agenda number <span class="optional">optional</span><input name="agenda_no" placeholder="e.g. 4.2"></label>
     <button class="btn" type="submit">Add to Agenda</button>
   </form>
-  {% else %}<div class="alert info">There are no applications currently in Full Board status.</div>{% endif %}
-</section>
+  {% else %}<div class="alert info">There are no Full Board or ratification applications awaiting agenda placement.</div>{% endif %}
+</section>{% endif %}
 <section class="card"><h2>Meeting details</h2><dl><dt>Status</dt><dd>{{ meeting.status.title() }}</dd><dt>Date</dt><dd>{{ meeting.meeting_date.strftime('%d %b %Y %H:%M') }}</dd><dt>Venue</dt><dd>{{ meeting.venue or '—' }}</dd><dt>Agenda items</dt><dd>{{ items|length }}</dd></dl></section>
 </div>
-<section class="card"><h2>Agenda</h2><table><thead><tr><th>Agenda</th><th>Reference</th><th>Applicant</th><th>Research title</th><th>Status</th></tr></thead><tbody>{% for item in items %}<tr><td>{{ item.agenda_no or '—' }}</td><td><a href="/applications/{{ item.application.id }}">{{ item.application.reference_no }}</a></td><td>{{ item.application.applicant.full_name }}</td><td>{{ item.application.title }}</td><td><span class="status {{ item.application.status }}">{{ status_label(item.application.status) }}</span></td></tr>{% else %}<tr><td colspan="5" class="empty">No applications have been added to this agenda.</td></tr>{% endfor %}</tbody></table></section>
+<section class="card"><h2>Board agenda and review material</h2><table><thead><tr><th>Agenda</th><th>Reference</th><th>Applicant</th><th>Research title</th><th>Route</th><th>College reviewer</th><th>College review report</th><th>Board action</th></tr></thead><tbody>
+{% for item in items %}{% set a=item.application %}{% set bundle=college_bundle_by_app.get(a.id) %}{% set report=bundle.report if bundle else none %}
+<tr><td>{{ item.agenda_no or '—' }}</td><td><a href="/applications/{{ a.id }}">{{ a.reference_no }}</a></td><td>{{ a.applicant.full_name }}</td><td>{{ a.title }}</td><td>{% if a.status == 'ethical_approval_pending_board_ratification' %}<span class="status pending_ratification">Ratification</span>{% else %}<span class="status">Full Board</span>{% endif %}</td><td>{{ bundle.reviewer_name if bundle else '—' }}</td><td>{% if report %}<a class="btn secondary smallbtn" href="/review-reports/{{ report.id }}/view" target="_blank">Open Review Report</a>{% else %}—{% endif %}</td><td>{% if user.role == 'irb_member' %}<a class="btn secondary smallbtn" href="/applications/{{ a.id }}">Review Application</a>{% elif a.status == 'ethical_approval_pending_board_ratification' %}<a class="btn red smallbtn" href="/applications/{{ a.id }}#board-ratification">Record Ratification</a>{% else %}<a class="btn red smallbtn" href="/applications/{{ a.id }}#final-decision">Record Board Decision</a>{% endif %}</td></tr>
+{% else %}<tr><td colspan="8" class="empty">No applications have been added to this agenda.</td></tr>{% endfor %}
+</tbody></table></section>
 {% endblock %}

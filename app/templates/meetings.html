@@ -1,9 +1,9 @@
 {% extends 'base.html' %}
 {% block title %}IRB Meetings · UCC IRB Ethical Clearance Portal{% endblock %}
 {% block content %}
-<div class="pagehead"><div><span class="eyebrow">Institutional Review Board</span><h1>IRB meetings and Full Board agenda</h1><p>Create meetings, build agendas and connect Full Board applications to the meeting where the final decision will be recorded.</p></div></div>
+<div class="pagehead"><div><span class="eyebrow">Institutional Review Board</span><h1>IRB meetings, Full Board review and ratification</h1><p>{% if user.role == "irb_member" %}Review applications and College Scientific Committee recommendations placed on the Board agenda.{% else %}Create meetings, place Full Board applications and conditional ethical approvals on the agenda, and record the Board outcome.{% endif %}</p></div>{% if user.role != "irb_member" %}<div class="actions"><a class="btn secondary" href="/secretariat/approved-register">Approved Works Register</a></div>{% endif %}</div>
 <div class="grid2">
-<section class="card actioncard">
+{% if user.role != "irb_member" %}<section class="card actioncard">
   <h2>Create IRB meeting</h2>
   <form method="post" action="/irb/meetings">
     <label>Meeting number<input name="meeting_no" required placeholder="e.g. UCC-IRB/2026/08"></label>
@@ -12,12 +12,16 @@
     <label>Meeting link <span class="optional">optional</span><input type="url" name="meeting_link" placeholder="https://..."></label>
     <button class="btn" type="submit">Create Meeting</button>
   </form>
-</section>
+</section>{% endif %}
 <section class="card">
-  <h2>Applications awaiting Full Board</h2>
-  {% for a in full_board_apps %}<div class="review-box"><h4><a href="/applications/{{ a.id }}">{{ a.reference_no }}</a></h4><div>{{ a.title }}</div><div class="review-meta"><span>{{ a.applicant.full_name }}</span></div></div>{% else %}<p class="empty">No applications currently awaiting Full Board consideration.</p>{% endfor %}
+  <h2>Approvals awaiting Board ratification</h2>
+  {% for a in pending_ratification_apps %}<div class="review-box"><h4><a href="/applications/{{ a.id }}">{{ a.reference_no }}</a></h4><div>{{ a.title }}</div><div class="review-meta"><span>{{ a.applicant.full_name }}</span><span>{{ a.college.name }}</span></div></div>{% else %}<p class="empty">No ethical approvals are currently awaiting Board ratification.</p>{% endfor %}
 </section>
 </div>
+<section class="card">
+  <h2>Applications awaiting Full Board review</h2>
+  {% for a in full_board_apps %}<div class="review-box"><h4><a href="/applications/{{ a.id }}">{{ a.reference_no }}</a></h4><div>{{ a.title }}</div><div class="review-meta"><span>{{ a.applicant.full_name }}</span></div></div>{% else %}<p class="empty">No applications currently awaiting Full Board consideration.</p>{% endfor %}
+</section>
 <h2>Meeting register</h2>
 {% for m in meetings %}<div class="card meeting-card"><div><h3><a href="/irb/meetings/{{ m.id }}">{{ m.meeting_no }}</a></h3><p>{{ m.meeting_date.strftime('%d %b %Y %H:%M') }} · {{ m.venue or 'Venue not stated' }} · {{ m.status.title() }}</p></div><a class="btn secondary" href="/irb/meetings/{{ m.id }}">Open Agenda</a></div>{% else %}<div class="card empty">No IRB meetings have been created.</div>{% endfor %}
 {% endblock %}

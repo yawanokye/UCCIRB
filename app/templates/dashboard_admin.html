@@ -3,7 +3,7 @@
 {% block content %}
 <div class="pagehead">
   <div><span class="eyebrow">System Administrator</span><h1>Administrative user management</h1><p>Applicants register themselves. Only the System Administrator creates accounts for IRB and College administrative/review users.</p></div>
-</div>
+<div class="actions"><a class="btn secondary" href="/secretariat/approved-register">Approved Works Register</a></div></div>
 <div class="metrics">
   <div><b>{{ users|length }}</b><span>Administrative accounts</span></div>
   <div><b>{{ applicant_count }}</b><span>Self-registered applicants</span></div>
@@ -36,6 +36,7 @@
             <option value="college_admin">College Scientific Committee Officer</option>
             <option value="college_reviewer">College Scientific Reviewer</option>
             <option value="irb_reviewer">IRB Reviewer</option>
+            <option value="irb_member">IRB Board Member</option>
             <option value="irb_chair">IRB Chairperson</option>
             <option value="superadmin">System Administrator</option>
           </select>

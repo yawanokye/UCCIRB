@@ -18,12 +18,20 @@
   {% set ns.show=true %}{% set ns.title='Act on Revised Submission' %}{% set ns.note='Choose whether to resubmit the revision to a previous/new reviewer or complete an administrative review.' %}{% set ns.href='#revision-disposition' %}{% set ns.label='Review Revised Submission' %}{% set ns.tone='goldline' %}
 {% elif user.role == 'college_admin' and app.status == 'awaiting_college_decision' %}
   {% set ns.show=true %}{% set ns.title='Record College Scientific Committee Decision' %}{% set ns.note='Scientific review is complete. Record the Committee decision to move the application to the IRB.' %}{% set ns.href='#college-decision' %}{% set ns.label='Record College Decision' %}{% set ns.tone='redline' %}
-{% elif user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status in ['returned_to_irb_secretariat','direct_irb_secretariat_pathway','irb_review_classification'] %}
-  {% set ns.show=true %}{% set ns.title='Classify IRB Review Pathway' %}{% set ns.note='The scientific/administrative prerequisite is complete. Select Exempt Determination, Expedited Review or Full Board Review.' %}{% set ns.href='#irb-prerequisite' %}{% set ns.label='Continue to IRB Classification' %}
+{% elif user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status == 'returned_to_irb_secretariat' and uses_college_scientific_review %}
+  {% set ns.show=true %}{% set ns.title='Administrative IRB Review of College Recommendation' %}{% set ns.note='The College Scientific Committee has completed its review. Review the recommendation and either grant ethical approval pending Board ratification, refer it to Full Board, or return it to the College for clarification.' %}{% set ns.href='#administrative-irb-review' %}{% set ns.label='Review College Recommendation' %}{% set ns.tone='goldline' %}
+{% elif user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status in ['direct_irb_secretariat_pathway','irb_review_classification'] %}
+  {% set ns.show=true %}{% set ns.title='Classify Direct IRB Review Pathway' %}{% set ns.note='This application is from a UCC unit without a College Scientific Committee. Select Exempt Determination, Expedited Review or Full Board Review.' %}{% set ns.href='#irb-prerequisite' %}{% set ns.label='Continue to IRB Classification' %}
+{% elif user.role in ['irb_secretariat','irb_chair','superadmin'] and uses_college_scientific_review and active_classification and not certificates %}
+  {% set ns.show=true %}{% set ns.title='Correct IRB Processing Route' %}{% set ns.note='This College-pathway application has an active IRB classification after College recommendation. If that classification was entered in error, restore processing to Returned to IRB Secretariat for IRB Processing.' %}{% set ns.href='#irb-reset' %}{% set ns.label='Correct Route' %}{% set ns.tone='redline' %}
 {% elif user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status == 'exempt_determination_pending' %}
   {% set ns.show=true %}{% set ns.title='Record Authorised Exempt Determination' %}{% set ns.note='An Exempt pathway has been designated. Record the authorised IRB determination or reclassify the application.' %}{% set ns.href='#exempt-determination' %}{% set ns.label='Act on Exempt Determination' %}{% set ns.tone='goldline' %}
 {% elif user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status in ['awaiting_irb_reviewer_assignment','under_irb_ethical_review','irb_revised_submission_received'] %}
   {% set ns.show=true %}{% set ns.title='Continue IRB Ethical Review' %}{% set ns.note='The application is in the IRB reviewer pathway. Assign or monitor the required ethical review.' %}{% set ns.href='/irb/review-queue' %}{% set ns.label='Open IRB Review Queue' %}
+{% elif user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status == 'ethical_approval_pending_board_ratification' and not meeting_items %}
+  {% set ns.show=true %}{% set ns.title='Schedule Board Ratification' %}{% set ns.note='Ethical approval has been granted pending formal Board ratification. Add this application to the next IRB Board meeting agenda.' %}{% set ns.href='/irb/meetings' %}{% set ns.label='Schedule for Ratification' %}{% set ns.tone='redline' %}
+{% elif user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status == 'ethical_approval_pending_board_ratification' and meeting_items %}
+  {% set ns.show=true %}{% set ns.title='Record Board Ratification' %}{% set ns.note='The application is on an IRB Board agenda. Record the Board review and ratification outcome.' %}{% set ns.href='#board-ratification' %}{% set ns.label='Record Ratification' %}{% set ns.tone='redline' %}
 {% elif user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status == 'scheduled_for_full_board_review' and not meeting_items %}
   {% set ns.show=true %}{% set ns.title='Schedule Full Board Consideration' %}{% set ns.note='This application requires Full Board consideration and must be placed on an IRB meeting agenda before the final decision is recorded.' %}{% set ns.href='/irb/meetings' %}{% set ns.label='Open IRB Meetings' %}{% set ns.tone='redline' %}
 {% elif user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status in ['awaiting_final_irb_decision','scheduled_for_full_board_review','deferred'] %}
@@ -357,7 +365,41 @@
 </section>
 {% endif %}
 
-{% if user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status in ['returned_to_irb_secretariat','direct_irb_secretariat_pathway','irb_review_classification'] %}
+{% if user.role in ['irb_secretariat','irb_chair','superadmin'] and uses_college_scientific_review and college_decisions and (active_classification or app.status not in ['returned_to_irb_secretariat','active_study','ethical_approval_pending_board_ratification']) and not certificates %}
+<section class="card actioncard redline {% if required_target == 'irb-reset' %}required-highlight{% endif %}" id="irb-reset">
+  <h2>Correct IRB Processing Route</h2>
+  <p>Use this only to correct an IRB route entered after the College Scientific Committee had already completed and recommended the application. Earlier route/classification records remain in the confidential audit trail but are superseded operationally.</p>
+  <form method="post" action="/irb/{{ app.id }}/reset-processing">
+    <label>Reason for correction<textarea name="reason" rows="4" required placeholder="Explain why IRB processing must be restored to the point immediately after the College recommendation."></textarea></label>
+    <button class="btn red" type="submit">Reset to Returned to IRB Secretariat for IRB Processing</button>
+  </form>
+</section>
+{% endif %}
+
+{% if user.role in ['irb_secretariat','irb_chair','superadmin'] and uses_college_scientific_review and app.status == 'returned_to_irb_secretariat' %}
+<section class="card actioncard goldline {% if required_target == 'administrative-irb-review' %}required-highlight{% endif %}" id="administrative-irb-review">
+  <h2>Administrative IRB Review of College Scientific Recommendation</h2>
+  <p>The College scientific review is complete. Exempt/Expedited classification is not used as the normal next step for this College pathway. An authorised IRB officer may grant ethical approval pending Board ratification, refer the recommendation directly to Full Board, or return it to the College for clarification.</p>
+  <form method="post" action="/irb/{{ app.id }}/administrative-review">
+    <div class="formgrid">
+      <label>Administrative action<select name="decision" required>
+        <option value="">Select action</option>
+        <option value="conditional_approve">Grant Ethical Approval – Pending Board Ratification</option>
+        <option value="full_board">Refer Directly to Full Board Review</option>
+        <option value="return_college">Return to College Scientific Committee for Clarification</option>
+      </select></label>
+      <label>Officer who reviewed and approved<select name="approving_officer_id">
+        <option value="">Select authorised officer</option>
+        {% for officer in approval_officers %}<option value="{{ officer.id }}">{{ officer.full_name }} · {{ officer.role.replace('_',' ').title() }}</option>{% endfor %}
+      </select></label>
+      <label class="wide">Conditions / review note<textarea name="note" rows="5" placeholder="Record any conditions, reason for Full Board referral, or clarification required from the College."></textarea></label>
+    </div>
+    <button class="btn" type="submit">Record Administrative IRB Action</button>
+  </form>
+</section>
+{% endif %}
+
+{% if user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status in ['direct_irb_secretariat_pathway','irb_review_classification'] %}
 {% if is_direct_irb and app.status == 'direct_irb_secretariat_pathway' %}<div class="alert info direct-path-alert"><strong>No College Scientific Committee applies.</strong> The Secretariat can now classify this application for IRB ethical review.</div>{% endif %}
 <section class="card actioncard navyline {% if required_target == 'irb-prerequisite' %}required-highlight{% endif %}" id="irb-prerequisite">
   <h2>IRB review classification</h2>
@@ -372,7 +414,7 @@
 {% if classifications and user.role in ['irb_secretariat','irb_chair','superadmin'] %}
 <section class="card">
   <h2>IRB classifications</h2>
-  <table><thead><tr><th>Date</th><th>Classification</th><th>Rationale</th></tr></thead><tbody>{% for c in classifications %}<tr><td>{{ c.classified_at.strftime('%d %b %Y') }}</td><td>{{ c.classification.replace('_',' ').title() }}</td><td>{{ c.rationale or '—' }}</td></tr>{% endfor %}</tbody></table>
+  <table><thead><tr><th>Date</th><th>Classification</th><th>Status</th><th>Rationale</th></tr></thead><tbody>{% for c in classifications %}<tr><td>{{ c.classified_at.strftime('%d %b %Y') }}</td><td>{{ c.classification.replace('_',' ').title() }}</td><td>{% if classification_superseded.get(c.id) %}<span class="status superseded">Superseded</span>{% else %}<span class="status valid">Active</span>{% endif %}</td><td>{{ c.rationale or '—' }}</td></tr>{% endfor %}</tbody></table>
 </section>
 {% endif %}
 
@@ -420,6 +462,26 @@
 </section>
 {% endif %}
 
+{% if user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status == 'ethical_approval_pending_board_ratification' %}
+<section class="card actioncard redline {% if required_target == 'board-ratification' %}required-highlight{% endif %}" id="board-ratification">
+  <h2>IRB Board Review and Ratification</h2>
+  <p>The application already has ethical approval pending Board ratification. The Board may review the College Scientific Committee recommendation and reviewer report, then ratify, vary the conditions, defer, or revoke the approval. The officer recording the Board outcome is retained in the audit trail.</p>
+  {% if meeting_items %}
+  <form method="post" action="/irb/{{ app.id }}/ratification">
+    <div class="formgrid">
+      <label>IRB Board meeting<select name="meeting_id" required>{% for item in meeting_items %}<option value="{{ item.meeting.id }}">{{ item.meeting.meeting_no }} · {{ item.meeting.meeting_date.strftime('%d %b %Y') }}</option>{% endfor %}</select></label>
+      <label>Board decision<select name="decision" required><option value="ratify">Ratify Ethical Approval</option><option value="ratify_conditions">Ratify with Additional/Modified Conditions</option><option value="defer">Defer Ratification</option><option value="revoke">Do Not Ratify / Revoke Approval</option></select></label>
+      <label>Authorised officer recording Board outcome<select name="ratifying_officer_id" required><option value="">Select officer</option>{% for officer in approval_officers %}<option value="{{ officer.id }}">{{ officer.full_name }} · {{ officer.role.replace('_',' ').title() }}</option>{% endfor %}</select></label>
+      <label class="wide">Board comments / conditions<textarea name="note" rows="5" placeholder="Record the Board's decision, conditions or reason for deferral/revocation."></textarea></label>
+    </div>
+    <button class="btn red" type="submit">Record Board Ratification Decision</button>
+  </form>
+  {% else %}
+    <div class="alert warning"><strong>Board meeting required.</strong> Add this approval to an IRB meeting agenda before ratification is recorded. <a href="/irb/meetings">Open IRB Meetings</a>.</div>
+  {% endif %}
+</section>
+{% endif %}
+
 {% if user.role in ['irb_secretariat','irb_chair','superadmin'] and app.status in ['awaiting_final_irb_decision','scheduled_for_full_board_review','deferred'] %}
 <section class="card actioncard redline {% if required_target == 'final-decision' %}required-highlight{% endif %}" id="final-decision">
   <h2>Final IRB Approval / Decision</h2>
@@ -432,6 +494,7 @@
         <option value="IRB Chairperson">IRB Chairperson</option>
       </select></label>
       <label>Decision<select name="decision" required><option value="approved">Approved</option><option value="approved_conditions">Approved with Conditions</option><option value="deferred">Deferred</option><option value="rejected">Rejected</option></select></label>
+      <label>Officer who reviewed and approved<select name="approving_officer_id" required><option value="">Select authorised officer</option>{% for officer in approval_officers %}<option value="{{ officer.id }}">{{ officer.full_name }} · {{ officer.role.replace('_',' ').title() }}</option>{% endfor %}</select></label>
       <label>IRB meeting {% if app.status == 'scheduled_for_full_board_review' %}<span class="urgent">required</span>{% else %}<span class="optional">optional</span>{% endif %}<select name="meeting_id"><option value="">No meeting / Chair determination</option>{% for m in meetings %}<option value="{{ m.id }}">{{ m.meeting_no }} · {{ m.meeting_date.strftime('%d %b %Y') }}</option>{% endfor %}</select></label>
       <label class="wide">Conditions / decision reasons<textarea name="conditions" rows="5" placeholder="Record approval conditions, reasons for deferral, or reasons for rejection."></textarea></label>
     </div>
@@ -447,6 +510,13 @@
 </section>
 {% endif %}
 
+{% if approval_records and user.role in ['irb_secretariat','irb_chair','superadmin'] %}
+<section class="card">
+  <h2>Ethical approval and Board ratification record</h2>
+  <table><thead><tr><th>Approved</th><th>Approval type</th><th>Status</th><th>Approving officer</th><th>Board meeting</th><th>Ratification</th></tr></thead><tbody>{% for r in approval_records %}<tr><td>{{ r.approved_at.strftime('%d %b %Y') }}</td><td>{{ r.approval_type.replace('_',' ').title() }}</td><td>{{ r.status.replace('_',' ').title() }}</td><td>{{ r.approving_officer.full_name if r.approving_officer else '—' }}</td><td>{{ r.ratification_meeting.meeting_no if r.ratification_meeting else 'Pending' }}</td><td>{{ r.ratification_decision.replace('_',' ').title() if r.ratification_decision else 'Pending' }}</td></tr>{% endfor %}</tbody></table>
+</section>
+{% endif %}
+
 {% if certificates %}
 <section class="card">
   <h2>IRB certificates and determinations</h2>
@@ -454,7 +524,7 @@
 </section>
 {% endif %}
 
-{% if user.id == app.applicant_id and app.status in ['active_study','ethical_clearance_issued'] %}
+{% if user.id == app.applicant_id and app.status in ['active_study','ethical_clearance_issued','ethical_approval_pending_board_ratification'] %}
 <section class="card actioncard">
   <h2>Post-approval action</h2>
   <p>Use this module for changes or events after ethical clearance has been issued.</p>
