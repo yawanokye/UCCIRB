@@ -18,6 +18,7 @@ ADMIN_ROLES = {
     Role.COLLEGE_ADMIN.value,
     Role.COLLEGE_REVIEWER.value,
     Role.IRB_REVIEWER.value,
+    Role.IRB_MEMBER.value,
     Role.IRB_CHAIR.value,
 }
 

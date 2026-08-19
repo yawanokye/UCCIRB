@@ -29,7 +29,9 @@ from ..models import (
     CollegeAccessRequest,
     CollegeDecision,
     EthicsApplication,
+    EthicalApprovalRecord,
     IRBClassification,
+    IRBProcessingReset,
     IRBDecision,
     IRBMeeting,
     IRBMeetingItem,
@@ -389,6 +391,8 @@ def can_view_metadata(db: Session, user: User, app: EthicsApplication) -> bool:
         return True
     if user.role in {Role.SUPERADMIN.value, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value}:
         return True
+    if user.role == Role.IRB_MEMBER.value:
+        return db.scalar(select(IRBMeetingItem.id).where(IRBMeetingItem.application_id == app.id)) is not None
     if user.role == Role.COLLEGE_ADMIN.value:
         return user.college_id == app.college_id and app.status != AppStatus.DRAFT.value
     if user.role in {Role.COLLEGE_REVIEWER.value, Role.IRB_REVIEWER.value}:
@@ -418,6 +422,8 @@ def reviewer_has_clear_declaration(db: Session, user: User, app: EthicsApplicati
 def can_view_documents(db: Session, user: User, app: EthicsApplication) -> bool:
     if user.id == app.applicant_id or user.role in {Role.SUPERADMIN.value, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value}:
         return True
+    if user.role == Role.IRB_MEMBER.value:
+        return db.scalar(select(IRBMeetingItem.id).where(IRBMeetingItem.application_id == app.id)) is not None
     if user.role == Role.COLLEGE_ADMIN.value and user.college_id == app.college_id:
         # The College may see metadata from first submission, but substantive documents become
         # available automatically only after the Secretariat marks the application complete
@@ -435,12 +441,59 @@ def can_view_documents(db: Session, user: User, app: EthicsApplication) -> bool:
     return False
 
 
-def latest_classification(db: Session, app_id: str):
+def latest_irb_processing_reset(db: Session, app_id: str):
     return db.scalar(
-        select(IRBClassification)
-        .where(IRBClassification.application_id == app_id)
-        .order_by(IRBClassification.classified_at.desc())
+        select(IRBProcessingReset)
+        .where(IRBProcessingReset.application_id == app_id)
+        .order_by(IRBProcessingReset.reset_at.desc())
     )
+
+
+def latest_classification(db: Session, app_id: str):
+    stmt = select(IRBClassification).where(IRBClassification.application_id == app_id)
+    reset = latest_irb_processing_reset(db, app_id)
+    if reset:
+        stmt = stmt.where(IRBClassification.classified_at > reset.reset_at)
+    return db.scalar(stmt.order_by(IRBClassification.classified_at.desc()))
+
+
+def classification_superseded_map(db: Session, app_id: str, classifications):
+    reset = latest_irb_processing_reset(db, app_id)
+    if not reset:
+        return {c.id: False for c in classifications}
+    return {c.id: c.classified_at <= reset.reset_at for c in classifications}
+
+
+def latest_approval_record(db: Session, app_id: str):
+    return db.scalar(
+        select(EthicalApprovalRecord)
+        .where(EthicalApprovalRecord.application_id == app_id)
+        .order_by(EthicalApprovalRecord.approved_at.desc())
+    )
+
+
+def latest_college_decision(db: Session, app_id: str):
+    return db.scalar(
+        select(CollegeDecision)
+        .where(CollegeDecision.application_id == app_id)
+        .order_by(CollegeDecision.decided_at.desc())
+    )
+
+
+def college_recommendation_complete(db: Session, app: EthicsApplication) -> bool:
+    if not is_scientific_committee_college(app.college):
+        return False
+    decision = latest_college_decision(db, app.id)
+    return bool(decision and decision.decision == 'recommend')
+
+
+def approval_officer_choices(db: Session):
+    return db.scalars(
+        select(User).where(
+            User.active == True,
+            User.role.in_([Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value]),
+        ).order_by(User.full_name)
+    ).all()
 
 
 def latest_certificate(db: Session, app_id: str):
@@ -760,6 +813,32 @@ def applicant_public_history_note(note: str | None) -> str | None:
     return note
 
 
+def latest_college_review_bundle(db: Session, app_id: str):
+    assignment = db.scalar(
+        select(ReviewerAssignment)
+        .options(joinedload(ReviewerAssignment.reviewer))
+        .where(
+            ReviewerAssignment.application_id == app_id,
+            ReviewerAssignment.level == 'college',
+            ReviewerAssignment.status == 'completed',
+        )
+        .order_by(ReviewerAssignment.completed_at.desc(), ReviewerAssignment.assigned_at.desc())
+    )
+    if not assignment:
+        return {'assignment': None, 'reviewer_name': '—', 'report': None}
+    contact = reviewer_contact_for_proxy(db, assignment.reviewer_id)
+    if contact:
+        reviewer_name = ' '.join(x for x in [contact.title or '', contact.first_name, contact.last_name] if x).strip()
+    else:
+        reviewer_name = assignment.reviewer.full_name if assignment.reviewer else 'Scientific reviewer'
+    report = db.scalar(
+        select(ReviewReportDocument)
+        .where(ReviewReportDocument.assignment_id == assignment.id, ReviewReportDocument.document_kind == 'review_report')
+        .order_by(ReviewReportDocument.uploaded_at.desc())
+    )
+    return {'assignment': assignment, 'reviewer_name': reviewer_name, 'report': report}
+
+
 def previous_college_reviewers(db: Session, app_id: str):
     assignments = db.scalars(
         select(ReviewerAssignment)
@@ -878,8 +957,13 @@ def active_duplicate_assignment(db: Session, app_id: str, reviewer_id: str, leve
     )
 
 
-def issue_clearance(db: Session, app: EthicsApplication, issuer: User, conditions: str | None = None):
-    """Issue the final ethics approval certificate after an authorised IRB approval."""
+def issue_clearance(db: Session, app: EthicsApplication, issuer: User, conditions: str | None = None, *, status: str = 'valid', document_kind: str = 'ethical_clearance'):
+    """Issue a QR-verifiable ethics certificate.
+
+    ``pending_ratification`` is used for College-pathway administrative approvals that
+    take effect before the Board meeting but remain expressly subject to Board
+    ratification. The same certificate number is retained when the Board later ratifies.
+    """
     year = datetime.utcnow().year
     seq = (db.scalar(select(func.count(ClearanceCertificate.id)).where(func.extract('year', ClearanceCertificate.issue_date) == year)) or 0) + 1
     cert = ClearanceCertificate(
@@ -888,14 +972,19 @@ def issue_clearance(db: Session, app: EthicsApplication, issuer: User, condition
         verification_token=secrets.token_urlsafe(32),
         issue_date=datetime.utcnow(),
         expiry_date=datetime.utcnow() + timedelta(days=CLEARANCE_VALIDITY_DAYS),
-        status='valid',
+        status=status,
         conditions=conditions or None,
         issued_by=issuer.id,
     )
     db.add(cert)
     db.flush()
-    cert.pdf_stored_name = generate_certificate_pdf(cert, app, document_kind='ethical_clearance')
-    audit(db, issuer.id, 'ethics_approval_certificate_issued', app.id, cert.certificate_no)
+    cert.pdf_stored_name = generate_certificate_pdf(cert, app, document_kind=document_kind)
+    audit(db, issuer.id, 'ethics_approval_certificate_issued', app.id, f'{cert.certificate_no}; status={status}')
+    return cert
+
+
+def refresh_clearance_pdf(cert: ClearanceCertificate, app: EthicsApplication, document_kind: str = 'ethical_clearance'):
+    cert.pdf_stored_name = generate_certificate_pdf(cert, app, document_kind=document_kind)
     return cert
 
 
@@ -1031,6 +1120,9 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
                 previous_reviewers_by_app=previous_reviewers_by_app, revision_ready_ids=revision_ready_ids)
         )
 
+    if user.role == Role.IRB_MEMBER.value:
+        return RedirectResponse('/irb/meetings', status_code=303)
+
     if user.role in {Role.COLLEGE_REVIEWER.value, Role.IRB_REVIEWER.value}:
         assignments = db.scalars(
             select(ReviewerAssignment)
@@ -1087,7 +1179,10 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         direct_apps = [a for a in apps if is_direct_irb_affiliation(a.college)]
         college_path_apps = [a for a in apps if is_scientific_committee_college(a.college)]
         screening_apps = [a for a in apps if a.status in {AppStatus.SUBMITTED.value, AppStatus.SECRETARIAT_SCREENING.value}]
-        returned_for_irb_processing_apps = [a for a in apps if a.status in {AppStatus.RETURNED_TO_IRB.value, AppStatus.IRB_CLASSIFICATION.value}]
+        returned_for_irb_processing_apps = [a for a in apps if a.status in {AppStatus.RETURNED_TO_IRB.value, AppStatus.DIRECT_IRB.value, AppStatus.IRB_CLASSIFICATION.value}]
+        college_ready_for_admin_review = [a for a in apps if a.status == AppStatus.RETURNED_TO_IRB.value and is_scientific_committee_college(a.college)]
+        direct_ready_for_classification = [a for a in apps if a.status in {AppStatus.DIRECT_IRB.value, AppStatus.IRB_CLASSIFICATION.value} and is_direct_irb_affiliation(a.college)]
+        pending_ratification_apps = [a for a in apps if a.status == AppStatus.CONDITIONAL_APPROVAL_PENDING_RATIFICATION.value]
         exempt_pending_apps = [a for a in apps if a.status == AppStatus.EXEMPT_DETERMINATION_PENDING.value]
         final_decision_apps = [a for a in apps if a.status in {AppStatus.AWAITING_FINAL_DECISION.value, AppStatus.FULL_BOARD.value, AppStatus.DEFERRED.value}]
         return request.app.state.templates.TemplateResponse(
@@ -1097,6 +1192,9 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
                 request, user, apps=apps, pending_access=pending_access, post_requests=post_requests,
                 meetings_count=meetings_count, direct_apps=direct_apps, college_path_apps=college_path_apps, screening_apps=screening_apps, pending_attention=pending_attention,
                 returned_for_irb_processing_apps=returned_for_irb_processing_apps,
+                college_ready_for_admin_review=college_ready_for_admin_review,
+                direct_ready_for_classification=direct_ready_for_classification,
+                pending_ratification_apps=pending_ratification_apps,
                 exempt_pending_apps=exempt_pending_apps, final_decision_apps=final_decision_apps,
             ),
         )
@@ -1354,6 +1452,14 @@ def application_detail(request: Request, app_id: str, db: Session = Depends(get_
     classifications = db.scalars(
         select(IRBClassification).where(IRBClassification.application_id == app.id).order_by(IRBClassification.classified_at.desc())
     ).all()
+    classification_superseded = classification_superseded_map(db, app.id, classifications)
+    irb_processing_resets = db.scalars(
+        select(IRBProcessingReset).where(IRBProcessingReset.application_id == app.id).order_by(IRBProcessingReset.reset_at.desc())
+    ).all()
+    approval_records = db.scalars(
+        select(EthicalApprovalRecord).where(EthicalApprovalRecord.application_id == app.id).order_by(EthicalApprovalRecord.approved_at.desc())
+    ).all()
+    current_approval_record = approval_records[0] if approval_records else None
     irb_decisions = db.scalars(
         select(IRBDecision).where(IRBDecision.application_id == app.id).order_by(IRBDecision.decided_at.desc())
     ).all()
@@ -1368,7 +1474,23 @@ def application_detail(request: Request, app_id: str, db: Session = Depends(get_
     ).all()
     if user.id == app.applicant_id:
         status_history = [h for h in status_history if h.to_status not in APPLICANT_HIDDEN_STATUSES]
-        irb_decisions = [d for d in irb_decisions if d.decision in {'approved', 'approved_conditions', 'rejected', 'exempt_confirmed'}]
+        latest_reset = irb_processing_resets[0] if irb_processing_resets else None
+        if latest_reset:
+            prior_return = db.scalar(
+                select(StatusHistory)
+                .where(
+                    StatusHistory.application_id == app.id,
+                    StatusHistory.to_status == AppStatus.RETURNED_TO_IRB.value,
+                    StatusHistory.created_at < latest_reset.reset_at,
+                )
+                .order_by(StatusHistory.created_at.desc())
+            )
+            if prior_return:
+                status_history = [
+                    h for h in status_history
+                    if not (prior_return.created_at < h.created_at < latest_reset.reset_at)
+                ]
+        irb_decisions = [d for d in irb_decisions if d.decision in {'approved', 'approved_conditions', 'rejected', 'exempt_confirmed', 'conditional_approved_pending_board_ratification', 'board_ratified', 'board_ratified_conditions'}]
     public_history_notes = {h.id: applicant_public_history_note(h.note) for h in status_history}
     meetings = db.scalars(select(IRBMeeting).where(IRBMeeting.status.in_(['scheduled', 'draft'])).order_by(IRBMeeting.meeting_date)).all()
     meeting_items = db.scalars(
@@ -1412,6 +1534,12 @@ def application_detail(request: Request, app_id: str, db: Session = Depends(get_
             reviewer_workload=reviewer_workload(db, irb_reviewers or college_reviewers),
             college_decisions=college_decisions,
             classifications=classifications,
+            active_classification=latest_classification(db, app.id),
+            classification_superseded=classification_superseded,
+            irb_processing_resets=irb_processing_resets,
+            approval_records=approval_records,
+            current_approval_record=current_approval_record,
+            approval_officers=approval_officer_choices(db) if user.role in {Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value} else [],
             irb_decisions=irb_decisions,
             certificates=certificates,
             post_requests=post_requests,
@@ -1763,6 +1891,75 @@ def resolve_secretariat_attention(
     audit(db, user.id, 'secretariat_attention_request_resolved', req.application_id, req.resolution_note)
     db.commit()
     return RedirectResponse(f'/applications/{req.application_id}', status_code=303)
+
+
+@router.get('/secretariat/approved-register')
+def approved_works_register(
+    request: Request,
+    college: str = '',
+    status: str = '',
+    q: str = '',
+    export: str = '',
+    db: Session = Depends(get_db),
+):
+    user = require_user(request, db)
+    require_roles(user, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value)
+    records = db.scalars(
+        select(EthicalApprovalRecord)
+        .options(
+            joinedload(EthicalApprovalRecord.application).joinedload(EthicsApplication.applicant),
+            joinedload(EthicalApprovalRecord.application).joinedload(EthicsApplication.college),
+            joinedload(EthicalApprovalRecord.approving_officer),
+            joinedload(EthicalApprovalRecord.certificate),
+            joinedload(EthicalApprovalRecord.ratification_meeting),
+        )
+        .where(EthicalApprovalRecord.status.in_(['pending_ratification', 'ratified', 'ratified_conditions', 'final_approved']))
+        .order_by(EthicalApprovalRecord.approved_at.desc())
+    ).unique().all()
+
+    rows = []
+    query = q.strip().lower()
+    for rec in records:
+        app = rec.application
+        if not app:
+            continue
+        affiliation = (app.department or 'Other UCC Academic/Administrative Unit') if is_direct_irb_affiliation(app.college) else app.college.name
+        if college and app.college.code != college:
+            continue
+        if status and rec.status != status:
+            continue
+        haystack = ' '.join([app.reference_no or '', app.applicant.full_name, affiliation, app.title]).lower()
+        if query and query not in haystack:
+            continue
+        bundle = latest_college_review_bundle(db, app.id)
+        rows.append({
+            'record': rec,
+            'application': app,
+            'affiliation': affiliation,
+            'college_reviewer': bundle['reviewer_name'] if is_scientific_committee_college(app.college) else 'Not applicable – direct IRB pathway',
+            'approving_officer': rec.approving_officer.full_name if rec.approving_officer else '—',
+            'certificate': rec.certificate,
+        })
+
+    if export.lower() == 'csv':
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(['Reference', 'Applicant', 'College / UCC Unit', 'Research Title', 'College Scientific Reviewer', 'Officer Who Reviewed and Approved', 'Approval Date', 'Approval Status', 'Board Meeting / Ratification', 'Certificate Number', 'Certificate Verification Link'])
+        for row in rows:
+            rec, app, cert = row['record'], row['application'], row['certificate']
+            writer.writerow([
+                app.reference_no or '', app.applicant.full_name, row['affiliation'], app.title,
+                row['college_reviewer'], row['approving_officer'], rec.approved_at.strftime('%Y-%m-%d'),
+                rec.status.replace('_', ' ').title(), rec.ratification_meeting.meeting_no if rec.ratification_meeting else '',
+                cert.certificate_no if cert else '', f'{_base_url(request)}/verify/{cert.verification_token}' if cert else '',
+            ])
+        return Response(output.getvalue(), media_type='text/csv', headers={'Content-Disposition': 'attachment; filename="ucc-irb-approved-works-register.csv"'})
+
+    return request.app.state.templates.TemplateResponse(
+        request, 'approved_register.html',
+        ctx(request, user, rows=rows, colleges=get_scientific_committee_colleges(db),
+            selected_college=college, selected_status=status, q=q)
+    )
 
 
 @router.get('/secretariat/register')
@@ -2198,8 +2395,20 @@ def classify_irb_review(
     user = require_user(request, db)
     require_roles(user, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value)
     app = get_app_or_404(db, app_id)
-    if app.status not in {AppStatus.RETURNED_TO_IRB.value, AppStatus.DIRECT_IRB.value, AppStatus.IRB_CLASSIFICATION.value}:
-        return prerequisite_redirect(app.id, 'Complete the preceding scientific or Secretariat review stage before IRB classification.', 'irb-prerequisite')
+
+    # Exempt/Expedited/Full Board classification is the primary route only for UCC units
+    # that do not pass through one of the five College Scientific Committees. A College-
+    # pathway application that has already been scientifically recommended proceeds to
+    # administrative IRB review and, if approved, Board ratification. It can still be
+    # explicitly escalated to Full Board from that administrative review.
+    if is_scientific_committee_college(app.college):
+        return prerequisite_redirect(
+            app.id,
+            'This application has a College Scientific Committee route. Complete the College recommendation, then use Administrative IRB Review. Exempt/Expedited classification is reserved for direct IRB applications.',
+            'administrative-irb-review',
+        )
+    if app.status not in {AppStatus.DIRECT_IRB.value, AppStatus.IRB_CLASSIFICATION.value}:
+        return prerequisite_redirect(app.id, 'Complete the initial Secretariat screening before IRB classification.', 'irb-prerequisite')
     if classification not in {'exempt', 'expedited', 'full_board'}:
         raise HTTPException(400, 'Select a valid review classification.')
     db.add(IRBClassification(application_id=app.id, classification=classification, rationale=rationale or None, classified_by=user.id))
@@ -2210,6 +2419,120 @@ def classify_irb_review(
         transition(db, app, AppStatus.AWAITING_IRB_REVIEWER.value, user.id, 'Awaiting IRB reviewer assignment')
     else:
         transition(db, app, AppStatus.AWAITING_IRB_REVIEWER.value, user.id, 'Awaiting preliminary IRB reviewer assignment before Full Board consideration')
+    db.commit()
+    return RedirectResponse(f'/applications/{app.id}', status_code=303)
+
+
+@router.post('/irb/{app_id}/administrative-review')
+def administrative_irb_review(
+    request: Request,
+    app_id: str,
+    decision: str = Form(...),
+    approving_officer_id: str = Form(''),
+    note: str = Form(''),
+    db: Session = Depends(get_db),
+):
+    user = require_user(request, db)
+    require_roles(user, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value)
+    app = get_app_or_404(db, app_id)
+    if not is_scientific_committee_college(app.college):
+        return prerequisite_redirect(app.id, 'This application follows the direct IRB pathway and must be classified for IRB review.', 'irb-prerequisite')
+    if app.status != AppStatus.RETURNED_TO_IRB.value or not college_recommendation_complete(db, app):
+        return prerequisite_redirect(app.id, 'A College Scientific Committee recommendation is required before administrative IRB review.', 'administrative-irb-review')
+    if decision not in {'conditional_approve', 'full_board', 'return_college'}:
+        raise HTTPException(400, 'Select a valid administrative IRB action.')
+
+    if decision == 'conditional_approve':
+        officer = db.get(User, approving_officer_id) if approving_officer_id else user
+        if not officer or not officer.active or officer.role not in {Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value}:
+            return prerequisite_redirect(app.id, 'Select the authorised IRB officer who reviewed and approved the College recommendation.', 'administrative-irb-review')
+        if latest_certificate(db, app.id):
+            raise HTTPException(400, 'An ethics certificate has already been issued for this application.')
+        custom_note = note.strip() or None
+        certificate_conditions = 'This ethical approval is subject to formal ratification by the UCC Institutional Review Board.'
+        if custom_note:
+            certificate_conditions += f' Additional conditions: {custom_note}'
+        cert = issue_clearance(
+            db, app, officer, certificate_conditions,
+            status='pending_ratification', document_kind='conditional_clearance',
+        )
+        approval = EthicalApprovalRecord(
+            application_id=app.id,
+            approval_type='conditional_pending_board',
+            status='pending_ratification',
+            approving_authority='Administrative ethical approval pending IRB Board ratification',
+            approved_by=officer.id,
+            recorded_by=user.id,
+            approval_note=custom_note,
+            certificate_id=cert.id,
+        )
+        db.add(approval)
+        db.add(IRBDecision(
+            application_id=app.id,
+            decision='conditional_approved_pending_board_ratification',
+            conditions=custom_note,
+            decided_by=officer.id,
+        ))
+        transition(db, app, AppStatus.CONDITIONAL_APPROVAL_PENDING_RATIFICATION.value, user.id,
+                   f'Ethical approval granted by {officer.full_name} pending IRB Board ratification')
+        audit(db, user.id, 'conditional_ethics_approval_pending_board_ratification', app.id,
+              f'approved_by={officer.full_name}; certificate={cert.certificate_no}')
+    elif decision == 'full_board':
+        db.add(IRBClassification(
+            application_id=app.id,
+            classification='full_board',
+            rationale=note.strip() or 'College scientific recommendation escalated directly for Full Board consideration',
+            classified_by=user.id,
+        ))
+        transition(db, app, AppStatus.FULL_BOARD.value, user.id,
+                   'College scientific recommendation referred directly to Full Board consideration')
+        audit(db, user.id, 'college_recommendation_referred_full_board', app.id, note.strip() or None)
+    else:
+        transition(db, app, AppStatus.AWAITING_COLLEGE_DECISION.value, user.id,
+                   note.strip() or 'Returned to College Scientific Committee for clarification by the IRB Secretariat')
+        audit(db, user.id, 'irb_returned_college_recommendation_for_clarification', app.id, note.strip() or None)
+
+    db.commit()
+    return RedirectResponse(f'/applications/{app.id}', status_code=303)
+
+
+@router.post('/irb/{app_id}/reset-processing')
+def reset_irb_processing(
+    request: Request,
+    app_id: str,
+    reason: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    user = require_user(request, db)
+    require_roles(user, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value)
+    app = get_app_or_404(db, app_id)
+    if not is_scientific_committee_college(app.college) or not college_recommendation_complete(db, app):
+        return prerequisite_redirect(app.id, 'IRB processing can only be restored here after a completed College Scientific Committee recommendation.', 'irb-reset')
+    if not reason.strip():
+        return prerequisite_redirect(app.id, 'Enter the reason for restoring IRB processing.', 'irb-reset')
+    cert = latest_certificate(db, app.id)
+    if cert and cert.status in {'valid', 'pending_ratification'}:
+        raise HTTPException(400, 'An active ethics certificate already exists. Use the Board/approval controls rather than resetting the workflow.')
+
+    db.add(IRBProcessingReset(
+        application_id=app.id,
+        restored_status=AppStatus.RETURNED_TO_IRB.value,
+        reason=reason.strip(),
+        corrected_by=user.id,
+    ))
+    # Working IRB assignments created after an erroneous route are superseded. Their audit
+    # records and uploaded reports remain in the database.
+    for assignment in db.scalars(select(ReviewerAssignment).where(
+        ReviewerAssignment.application_id == app.id,
+        ReviewerAssignment.level == 'irb',
+        ReviewerAssignment.status.in_(['assigned', 'accepted']),
+    )).all():
+        assignment.status = 'superseded'
+    # Remove only live agenda placement so the corrected application can be routed afresh.
+    db.execute(delete(IRBMeetingItem).where(IRBMeetingItem.application_id == app.id))
+    transition(db, app, AppStatus.RETURNED_TO_IRB.value, user.id,
+               'IRB processing restored to the point immediately after College Scientific Committee recommendation')
+    audit(db, user.id, 'irb_processing_reset', app.id, reason.strip())
     db.commit()
     return RedirectResponse(f'/applications/{app.id}', status_code=303)
 
@@ -2297,15 +2620,24 @@ def assign_irb_reviewer(
 @router.get('/irb/meetings')
 def meetings_page(request: Request, db: Session = Depends(get_db)):
     user = require_user(request, db)
-    require_roles(user, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value)
+    require_roles(user, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.IRB_MEMBER.value, Role.SUPERADMIN.value)
     meetings = db.scalars(select(IRBMeeting).order_by(IRBMeeting.meeting_date.desc())).all()
-    full_board_apps = db.scalars(
+    agenda_candidates = db.scalars(
         select(EthicsApplication)
         .options(joinedload(EthicsApplication.applicant))
-        .where(EthicsApplication.status == AppStatus.FULL_BOARD.value)
+        .where(EthicsApplication.status.in_([
+            AppStatus.FULL_BOARD.value,
+            AppStatus.CONDITIONAL_APPROVAL_PENDING_RATIFICATION.value,
+        ]))
         .order_by(EthicsApplication.updated_at)
     ).unique().all()
-    return request.app.state.templates.TemplateResponse(request, 'meetings.html', ctx(request, user, meetings=meetings, full_board_apps=full_board_apps))
+    full_board_apps = [a for a in agenda_candidates if a.status == AppStatus.FULL_BOARD.value]
+    pending_ratification_apps = [a for a in agenda_candidates if a.status == AppStatus.CONDITIONAL_APPROVAL_PENDING_RATIFICATION.value]
+    return request.app.state.templates.TemplateResponse(
+        request, 'meetings.html',
+        ctx(request, user, meetings=meetings, full_board_apps=full_board_apps,
+            pending_ratification_apps=pending_ratification_apps, agenda_candidates=agenda_candidates)
+    )
 
 
 @router.post('/irb/meetings')
@@ -2340,7 +2672,7 @@ def create_meeting(
 @router.get('/irb/meetings/{meeting_id}')
 def meeting_detail(request: Request, meeting_id: str, db: Session = Depends(get_db)):
     user = require_user(request, db)
-    require_roles(user, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value)
+    require_roles(user, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.IRB_MEMBER.value, Role.SUPERADMIN.value)
     meeting = db.get(IRBMeeting, meeting_id)
     if not meeting:
         raise HTTPException(404, 'IRB meeting not found')
@@ -2350,12 +2682,24 @@ def meeting_detail(request: Request, meeting_id: str, db: Session = Depends(get_
         .where(IRBMeetingItem.meeting_id == meeting.id)
         .order_by(IRBMeetingItem.agenda_no, IRBMeetingItem.added_at)
     ).all()
-    full_board_apps = db.scalars(
+    agenda_candidates = db.scalars(
         select(EthicsApplication)
-        .where(EthicsApplication.status == AppStatus.FULL_BOARD.value)
+        .where(EthicsApplication.status.in_([
+            AppStatus.FULL_BOARD.value,
+            AppStatus.CONDITIONAL_APPROVAL_PENDING_RATIFICATION.value,
+        ]))
         .order_by(EthicsApplication.updated_at)
     ).all()
-    return request.app.state.templates.TemplateResponse(request, 'meeting_detail.html', ctx(request, user, meeting=meeting, items=items, full_board_apps=full_board_apps))
+    bundle_by_app = {item.application_id: latest_college_review_bundle(db, item.application_id) for item in items}
+    approval_by_app = {item.application_id: latest_approval_record(db, item.application_id) for item in items}
+    return request.app.state.templates.TemplateResponse(
+        request, 'meeting_detail.html',
+        ctx(request, user, meeting=meeting, items=items, agenda_candidates=agenda_candidates,
+            full_board_apps=[a for a in agenda_candidates if a.status == AppStatus.FULL_BOARD.value],
+            pending_ratification_apps=[a for a in agenda_candidates if a.status == AppStatus.CONDITIONAL_APPROVAL_PENDING_RATIFICATION.value],
+            college_bundle_by_app=bundle_by_app, approval_by_app=approval_by_app,
+            approval_officers=approval_officer_choices(db))
+    )
 
 
 @router.post('/irb/meetings/{meeting_id}/add')
@@ -2372,8 +2716,8 @@ def add_meeting_item(
     app = get_app_or_404(db, application_id)
     if not meeting:
         raise HTTPException(404, 'IRB meeting not found')
-    if app.status != AppStatus.FULL_BOARD.value:
-        raise HTTPException(400, 'Only Full Board applications can be scheduled here.')
+    if app.status not in {AppStatus.FULL_BOARD.value, AppStatus.CONDITIONAL_APPROVAL_PENDING_RATIFICATION.value}:
+        raise HTTPException(400, 'Only Full Board applications or approvals pending Board ratification can be scheduled here.')
     if db.scalar(select(IRBMeetingItem.id).where(IRBMeetingItem.meeting_id == meeting.id, IRBMeetingItem.application_id == app.id)):
         raise HTTPException(400, 'Application is already on this meeting agenda.')
     db.add(IRBMeetingItem(meeting_id=meeting.id, application_id=app.id, agenda_no=agenda_no or None, added_by=user.id))
@@ -2382,12 +2726,87 @@ def add_meeting_item(
     return RedirectResponse(f'/irb/meetings/{meeting.id}', status_code=303)
 
 
+@router.post('/irb/{app_id}/ratification')
+def record_board_ratification(
+    request: Request,
+    app_id: str,
+    decision: str = Form(...),
+    meeting_id: str = Form(...),
+    ratifying_officer_id: str = Form(''),
+    note: str = Form(''),
+    db: Session = Depends(get_db),
+):
+    user = require_user(request, db)
+    require_roles(user, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value)
+    app = get_app_or_404(db, app_id)
+    if app.status != AppStatus.CONDITIONAL_APPROVAL_PENDING_RATIFICATION.value:
+        return prerequisite_redirect(app.id, 'The application must first have an ethical approval pending Board ratification.', 'board-ratification')
+    approval = latest_approval_record(db, app.id)
+    if not approval or approval.status != 'pending_ratification' or not approval.certificate_id:
+        return prerequisite_redirect(app.id, 'No pending Board-ratification approval record was found.', 'board-ratification')
+    if decision not in {'ratify', 'ratify_conditions', 'defer', 'revoke'}:
+        raise HTTPException(400, 'Select a valid Board decision.')
+    meeting = db.get(IRBMeeting, meeting_id)
+    if not meeting:
+        return prerequisite_redirect(app.id, 'Select the IRB Board meeting at which the recommendation was considered.', 'board-ratification')
+    if not db.scalar(select(IRBMeetingItem.id).where(IRBMeetingItem.meeting_id == meeting.id, IRBMeetingItem.application_id == app.id)):
+        raise HTTPException(400, 'This application is not listed on the selected IRB meeting agenda.')
+    officer = db.get(User, ratifying_officer_id) if ratifying_officer_id else user
+    if not officer or not officer.active or officer.role not in {Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value}:
+        return prerequisite_redirect(app.id, 'Select the authorised officer recording the Board review outcome.', 'board-ratification')
+    if decision == 'ratify_conditions' and not note.strip():
+        return prerequisite_redirect(app.id, 'Enter the conditions imposed by the Board.', 'board-ratification')
+
+    cert = db.get(ClearanceCertificate, approval.certificate_id)
+    approval.ratification_meeting_id = meeting.id
+    approval.ratification_decision = decision
+    approval.ratification_note = note.strip() or None
+    approval.ratified_by = officer.id
+    approval.ratification_recorded_by = user.id
+    approval.ratified_at = datetime.utcnow()
+
+    if decision in {'ratify', 'ratify_conditions'}:
+        approval.status = 'ratified_conditions' if decision == 'ratify_conditions' else 'ratified'
+        if cert:
+            cert.status = 'valid'
+            cert.conditions = note.strip() or approval.approval_note
+            refresh_clearance_pdf(cert, app, 'ethical_clearance')
+        db.add(IRBDecision(
+            application_id=app.id,
+            decision='board_ratified_conditions' if decision == 'ratify_conditions' else 'board_ratified',
+            conditions=note.strip() or None,
+            meeting_id=meeting.id,
+            decided_by=officer.id,
+        ))
+        transition(db, app, AppStatus.BOARD_RATIFIED.value, user.id,
+                   f'IRB Board ratified the ethical approval at {meeting.meeting_no}')
+        transition(db, app, AppStatus.ACTIVE.value, user.id, 'IRB Board ratification completed; ethical approval remains active')
+    elif decision == 'defer':
+        approval.status = 'ratification_deferred'
+        if cert:
+            cert.status = 'suspended'
+            refresh_clearance_pdf(cert, app, 'conditional_clearance')
+        transition(db, app, AppStatus.DEFERRED.value, user.id, note.strip() or 'Board ratification deferred')
+    else:
+        approval.status = 'revoked'
+        if cert:
+            cert.status = 'revoked'
+            refresh_clearance_pdf(cert, app, 'conditional_clearance')
+        transition(db, app, AppStatus.REVOKED.value, user.id, note.strip() or 'Conditional ethical approval revoked by the IRB Board')
+
+    audit(db, user.id, 'board_ratification_recorded', app.id,
+          f'{decision}; meeting={meeting.meeting_no}; officer={officer.full_name}')
+    db.commit()
+    return RedirectResponse(f'/applications/{app.id}', status_code=303)
+
+
 @router.post('/irb/{app_id}/decision')
 def final_irb_decision(
     request: Request,
     app_id: str,
     decision: str = Form(...),
     authority: str = Form(...),
+    approving_officer_id: str = Form(''),
     conditions: str = Form(''),
     meeting_id: str = Form(''),
     db: Session = Depends(get_db),
@@ -2408,6 +2827,9 @@ def final_irb_decision(
         return prerequisite_redirect(app.id, 'A Full Board review must record the IRB Board as the approving authority.', 'final-decision')
     if decision == 'approved_conditions' and not conditions.strip():
         return prerequisite_redirect(app.id, 'Enter the approval conditions before recording an approval with conditions.', 'final-decision')
+    officer = db.get(User, approving_officer_id) if approving_officer_id else user
+    if not officer or not officer.active or officer.role not in {Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value}:
+        return prerequisite_redirect(app.id, 'Select the authorised officer who reviewed and approved the application.', 'final-decision')
     meeting = db.get(IRBMeeting, meeting_id) if meeting_id else None
     if app.status == AppStatus.FULL_BOARD.value and not meeting:
         return prerequisite_redirect(app.id, 'Select the IRB meeting at which the Full Board decision was made.', 'final-decision')
@@ -2420,21 +2842,37 @@ def final_irb_decision(
             decision=decision,
             conditions=conditions.strip() or None,
             meeting_id=meeting.id if meeting else None,
-            decided_by=user.id,
+            decided_by=officer.id,
         )
     )
     if decision in {'approved', 'approved_conditions'}:
         approval_status = AppStatus.FINAL_APPROVAL_CONDITIONS.value if decision == 'approved_conditions' else AppStatus.FINAL_APPROVAL.value
         approval_note = conditions.strip() if decision == 'approved_conditions' else f'Final IRB approval granted by {authority}'
         transition(db, app, approval_status, user.id, approval_note)
-        cert = issue_clearance(db, app, user, conditions.strip() or None)
+        cert = issue_clearance(db, app, officer, conditions.strip() or None)
+        approval_record = EthicalApprovalRecord(
+            application_id=app.id,
+            approval_type='final_irb',
+            status='ratified' if authority == 'IRB Board' else 'final_approved',
+            approving_authority=authority,
+            approved_by=officer.id,
+            recorded_by=user.id,
+            approval_note=conditions.strip() or None,
+            certificate_id=cert.id,
+            ratification_meeting_id=meeting.id if authority == 'IRB Board' and meeting else None,
+            ratification_decision='ratified' if authority == 'IRB Board' else None,
+            ratified_by=officer.id if authority == 'IRB Board' else None,
+            ratification_recorded_by=user.id if authority == 'IRB Board' else None,
+            ratified_at=datetime.utcnow() if authority == 'IRB Board' else None,
+        )
+        db.add(approval_record)
         transition(db, app, AppStatus.CLEARANCE_ISSUED.value, user.id, f'Ethics approval certificate issued: {cert.certificate_no}')
         transition(db, app, AppStatus.ACTIVE.value, user.id, 'Final IRB approval is active')
     elif decision == 'deferred':
         transition(db, app, AppStatus.DEFERRED.value, user.id, conditions or 'IRB decision deferred')
     else:
         transition(db, app, AppStatus.REJECTED.value, user.id, conditions or 'IRB application rejected')
-    audit(db, user.id, 'final_irb_decision', app.id, f'{decision}; approving_authority={authority}; recorded_by_role={user.role}')
+    audit(db, user.id, 'final_irb_decision', app.id, f'{decision}; approving_authority={authority}; approving_officer={officer.full_name}; recorded_by_role={user.role}')
     db.commit()
     return RedirectResponse(f'/applications/{app.id}', status_code=303)
 
@@ -3366,6 +3804,8 @@ def _authorise_review_report(request: Request, db: Session, document_id: str):
     app = assignment.application
     allowed = False
     if user.role in {Role.SUPERADMIN.value, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value}:
+        allowed = True
+    elif user.role == Role.IRB_MEMBER.value and db.scalar(select(IRBMeetingItem.id).where(IRBMeetingItem.application_id == app.id)):
         allowed = True
     elif user.role == Role.COLLEGE_ADMIN.value and assignment.level == 'college' and user.college_id == app.college_id:
         allowed = True
