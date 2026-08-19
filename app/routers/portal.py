@@ -25,6 +25,7 @@ from ..models import (
     ApplicationSubmission,
     AuditLog,
     ClearanceCertificate,
+    ClearanceCertificateFileBlob,
     College,
     CollegeAccessRequest,
     CollegeDecision,
@@ -392,7 +393,11 @@ def can_view_metadata(db: Session, user: User, app: EthicsApplication) -> bool:
     if user.role in {Role.SUPERADMIN.value, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value}:
         return True
     if user.role == Role.IRB_MEMBER.value:
-        return db.scalar(select(IRBMeetingItem.id).where(IRBMeetingItem.application_id == app.id)) is not None
+        return app.status in {
+            AppStatus.CONDITIONAL_APPROVAL_PENDING_RATIFICATION.value,
+            AppStatus.FULL_BOARD.value,
+            AppStatus.AWAITING_FINAL_DECISION.value,
+        }
     if user.role == Role.COLLEGE_ADMIN.value:
         return user.college_id == app.college_id and app.status != AppStatus.DRAFT.value
     if user.role in {Role.COLLEGE_REVIEWER.value, Role.IRB_REVIEWER.value}:
@@ -423,7 +428,11 @@ def can_view_documents(db: Session, user: User, app: EthicsApplication) -> bool:
     if user.id == app.applicant_id or user.role in {Role.SUPERADMIN.value, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value}:
         return True
     if user.role == Role.IRB_MEMBER.value:
-        return db.scalar(select(IRBMeetingItem.id).where(IRBMeetingItem.application_id == app.id)) is not None
+        return app.status in {
+            AppStatus.CONDITIONAL_APPROVAL_PENDING_RATIFICATION.value,
+            AppStatus.FULL_BOARD.value,
+            AppStatus.AWAITING_FINAL_DECISION.value,
+        }
     if user.role == Role.COLLEGE_ADMIN.value and user.college_id == app.college_id:
         # The College may see metadata from first submission, but substantive documents become
         # available automatically only after the Secretariat marks the application complete
@@ -494,6 +503,71 @@ def approval_officer_choices(db: Session):
             User.role.in_([Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value]),
         ).order_by(User.full_name)
     ).all()
+
+
+def certificate_document_kind(db: Session, cert: ClearanceCertificate) -> str:
+    if (cert.certificate_no or '').startswith('UCC-IRB-EX-'):
+        return 'exemption'
+    approval = db.scalar(
+        select(EthicalApprovalRecord)
+        .where(EthicalApprovalRecord.certificate_id == cert.id)
+        .order_by(EthicalApprovalRecord.approved_at.desc())
+    )
+    if approval and approval.approval_type == 'conditional_pending_board' and approval.status not in {'ratified', 'ratified_conditions'}:
+        return 'conditional_clearance'
+    if cert.status == 'pending_ratification':
+        return 'conditional_clearance'
+    return 'ethical_clearance'
+
+
+def persist_certificate_blob(db: Session, cert: ClearanceCertificate, app: EthicsApplication, document_kind: str | None = None) -> bytes:
+    """Generate the current certificate PDF and persist an authoritative DB copy."""
+    kind = document_kind or certificate_document_kind(db, cert)
+    cert.pdf_stored_name = generate_certificate_pdf(cert, app, document_kind=kind)
+    path = certificate_path(cert.pdf_stored_name)
+    content = path.read_bytes()
+    blob = db.get(ClearanceCertificateFileBlob, cert.id)
+    if blob:
+        blob.content = content
+        blob.media_type = 'application/pdf'
+        blob.size_bytes = len(content)
+        blob.updated_at = datetime.utcnow()
+    else:
+        db.add(ClearanceCertificateFileBlob(
+            certificate_id=cert.id,
+            content=content,
+            media_type='application/pdf',
+            size_bytes=len(content),
+        ))
+    return content
+
+
+def ensure_certificate_bytes(db: Session, cert: ClearanceCertificate, app: EthicsApplication) -> bytes:
+    """Return a certificate even when the ephemeral filesystem copy vanished.
+
+    Order: current file -> durable PostgreSQL blob -> regenerate from approval data.
+    Regeneration retains the certificate number/token and therefore preserves the
+    public verification identity while rebuilding the QR with the current base URL.
+    """
+    if cert.pdf_stored_name:
+        path = certificate_path(cert.pdf_stored_name)
+        if path.exists():
+            try:
+                content = path.read_bytes()
+            except OSError:
+                content = b''
+            if content:
+                blob = db.get(ClearanceCertificateFileBlob, cert.id)
+                if not blob:
+                    db.add(ClearanceCertificateFileBlob(
+                        certificate_id=cert.id, content=content,
+                        media_type='application/pdf', size_bytes=len(content),
+                    ))
+                return content
+    blob = db.get(ClearanceCertificateFileBlob, cert.id)
+    if blob and blob.content:
+        return bytes(blob.content)
+    return persist_certificate_blob(db, cert, app)
 
 
 def latest_certificate(db: Session, app_id: str):
@@ -978,13 +1052,13 @@ def issue_clearance(db: Session, app: EthicsApplication, issuer: User, condition
     )
     db.add(cert)
     db.flush()
-    cert.pdf_stored_name = generate_certificate_pdf(cert, app, document_kind=document_kind)
+    persist_certificate_blob(db, cert, app, document_kind=document_kind)
     audit(db, issuer.id, 'ethics_approval_certificate_issued', app.id, f'{cert.certificate_no}; status={status}')
     return cert
 
 
-def refresh_clearance_pdf(cert: ClearanceCertificate, app: EthicsApplication, document_kind: str = 'ethical_clearance'):
-    cert.pdf_stored_name = generate_certificate_pdf(cert, app, document_kind=document_kind)
+def refresh_clearance_pdf(db: Session, cert: ClearanceCertificate, app: EthicsApplication, document_kind: str = 'ethical_clearance'):
+    persist_certificate_blob(db, cert, app, document_kind=document_kind)
     return cert
 
 
@@ -1004,7 +1078,7 @@ def issue_exemption_determination(db: Session, app: EthicsApplication, issuer: U
     )
     db.add(cert)
     db.flush()
-    cert.pdf_stored_name = generate_certificate_pdf(cert, app, document_kind='exemption')
+    persist_certificate_blob(db, cert, app, document_kind='exemption')
     audit(db, issuer.id, 'exemption_determination_issued', app.id, cert.certificate_no)
     return cert
 
@@ -1121,7 +1195,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         )
 
     if user.role == Role.IRB_MEMBER.value:
-        return RedirectResponse('/irb/meetings', status_code=303)
+        return RedirectResponse('/irb/board-review', status_code=303)
 
     if user.role in {Role.COLLEGE_REVIEWER.value, Role.IRB_REVIEWER.value}:
         assignments = db.scalars(
@@ -1175,7 +1249,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
             .where(PostApprovalRequest.status == 'pending')
             .order_by(PostApprovalRequest.submitted_at)
         ).all()
-        meetings_count = db.scalar(select(func.count(IRBMeeting.id))) or 0
+        meetings_count = 0
         direct_apps = [a for a in apps if is_direct_irb_affiliation(a.college)]
         college_path_apps = [a for a in apps if is_scientific_committee_college(a.college)]
         screening_apps = [a for a in apps if a.status in {AppStatus.SUBMITTED.value, AppStatus.SECRETARIAT_SCREENING.value}]
@@ -1904,16 +1978,49 @@ def approved_works_register(
 ):
     user = require_user(request, db)
     require_roles(user, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value)
+    rows = _approval_register_rows(db, college=college, status=status, q=q, final_only=False)
+    if export.lower() == 'csv':
+        return _approval_register_csv(request, rows, 'ucc-irb-approved-works-register.csv', final_only=False)
+    return request.app.state.templates.TemplateResponse(
+        request, 'approved_register.html',
+        ctx(request, user, rows=rows, colleges=get_scientific_committee_colleges(db),
+            selected_college=college, selected_status=status, q=q)
+    )
+
+
+@router.get('/secretariat/final-approval-register')
+def final_approval_register(
+    request: Request,
+    college: str = '',
+    q: str = '',
+    export: str = '',
+    db: Session = Depends(get_db),
+):
+    user = require_user(request, db)
+    require_roles(user, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value)
+    rows = _approval_register_rows(db, college=college, status='', q=q, final_only=True)
+    if export.lower() == 'csv':
+        return _approval_register_csv(request, rows, 'ucc-irb-final-approval-register.csv', final_only=True)
+    return request.app.state.templates.TemplateResponse(
+        request, 'final_approval_register.html',
+        ctx(request, user, rows=rows, colleges=get_scientific_committee_colleges(db), selected_college=college, q=q)
+    )
+
+
+def _approval_register_rows(db: Session, college: str = '', status: str = '', q: str = '', final_only: bool = False):
+    allowed_statuses = ['ratified', 'ratified_conditions', 'final_approved'] if final_only else [
+        'pending_ratification', 'ratified', 'ratified_conditions', 'final_approved'
+    ]
     records = db.scalars(
         select(EthicalApprovalRecord)
         .options(
             joinedload(EthicalApprovalRecord.application).joinedload(EthicsApplication.applicant),
             joinedload(EthicalApprovalRecord.application).joinedload(EthicsApplication.college),
             joinedload(EthicalApprovalRecord.approving_officer),
+            joinedload(EthicalApprovalRecord.ratifying_officer),
             joinedload(EthicalApprovalRecord.certificate),
-            joinedload(EthicalApprovalRecord.ratification_meeting),
         )
-        .where(EthicalApprovalRecord.status.in_(['pending_ratification', 'ratified', 'ratified_conditions', 'final_approved']))
+        .where(EthicalApprovalRecord.status.in_(allowed_statuses))
         .order_by(EthicalApprovalRecord.approved_at.desc())
     ).unique().all()
 
@@ -1932,34 +2039,50 @@ def approved_works_register(
         if query and query not in haystack:
             continue
         bundle = latest_college_review_bundle(db, app.id)
+        is_conditional = rec.approval_type == 'conditional_pending_board'
+        conditional_approver = rec.approving_officer.full_name if is_conditional and rec.approving_officer else ('Not applicable' if not is_conditional else '—')
+        conditional_date = rec.approved_at.strftime('%d %b %Y') if is_conditional else 'Not applicable'
+        if rec.status in {'ratified', 'ratified_conditions'}:
+            final_approver = rec.ratifying_officer.full_name if rec.ratifying_officer else '—'
+            final_date = rec.ratified_at.strftime('%d %b %Y') if rec.ratified_at else '—'
+        elif rec.approval_type == 'final_irb' and rec.status == 'final_approved':
+            final_approver = rec.approving_officer.full_name if rec.approving_officer else '—'
+            final_date = rec.approved_at.strftime('%d %b %Y')
+        else:
+            final_approver = 'Pending Board Ratification'
+            final_date = 'Pending'
         rows.append({
             'record': rec,
             'application': app,
             'affiliation': affiliation,
             'college_reviewer': bundle['reviewer_name'] if is_scientific_committee_college(app.college) else 'Not applicable – direct IRB pathway',
-            'approving_officer': rec.approving_officer.full_name if rec.approving_officer else '—',
+            'conditional_approver': conditional_approver,
+            'conditional_date': conditional_date,
+            'final_approver': final_approver,
+            'final_date': final_date,
             'certificate': rec.certificate,
         })
+    return rows
 
-    if export.lower() == 'csv':
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow(['Reference', 'Applicant', 'College / UCC Unit', 'Research Title', 'College Scientific Reviewer', 'Officer Who Reviewed and Approved', 'Approval Date', 'Approval Status', 'Board Meeting / Ratification', 'Certificate Number', 'Certificate Verification Link'])
-        for row in rows:
-            rec, app, cert = row['record'], row['application'], row['certificate']
-            writer.writerow([
-                app.reference_no or '', app.applicant.full_name, row['affiliation'], app.title,
-                row['college_reviewer'], row['approving_officer'], rec.approved_at.strftime('%Y-%m-%d'),
-                rec.status.replace('_', ' ').title(), rec.ratification_meeting.meeting_no if rec.ratification_meeting else '',
-                cert.certificate_no if cert else '', f'{_base_url(request)}/verify/{cert.verification_token}' if cert else '',
-            ])
-        return Response(output.getvalue(), media_type='text/csv', headers={'Content-Disposition': 'attachment; filename="ucc-irb-approved-works-register.csv"'})
 
-    return request.app.state.templates.TemplateResponse(
-        request, 'approved_register.html',
-        ctx(request, user, rows=rows, colleges=get_scientific_committee_colleges(db),
-            selected_college=college, selected_status=status, q=q)
-    )
+def _approval_register_csv(request: Request, rows, filename: str, final_only: bool = False):
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        'Reference', 'Applicant', 'College / UCC Unit', 'Research Title', 'College Scientific Reviewer',
+        'Conditional / Initial Approval By', 'Conditional / Initial Approval Date',
+        'Final Approval / Ratification By', 'Final Approval Date', 'Approval Status',
+        'Certificate Number', 'Certificate Verification Link'
+    ])
+    for row in rows:
+        rec, app, cert = row['record'], row['application'], row['certificate']
+        writer.writerow([
+            app.reference_no or '', app.applicant.full_name, row['affiliation'], app.title,
+            row['college_reviewer'], row['conditional_approver'], row['conditional_date'],
+            row['final_approver'], row['final_date'], rec.status.replace('_', ' ').title(),
+            cert.certificate_no if cert else '', f'{_base_url(request)}/verify/{cert.verification_token}' if cert else '',
+        ])
+    return Response(output.getvalue(), media_type='text/csv', headers={'Content-Disposition': f'attachment; filename="{filename}"'})
 
 
 @router.get('/secretariat/register')
@@ -2617,113 +2740,55 @@ def assign_irb_reviewer(
     return RedirectResponse(f'/applications/{app.id}', status_code=303)
 
 
+@router.get('/irb/board-review')
+def board_review_queue(request: Request, db: Session = Depends(get_db)):
+    user = require_user(request, db)
+    require_roles(user, Role.IRB_MEMBER.value, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value)
+    pending_apps = db.scalars(
+        select(EthicsApplication)
+        .options(joinedload(EthicsApplication.applicant), joinedload(EthicsApplication.college))
+        .where(EthicsApplication.status == AppStatus.CONDITIONAL_APPROVAL_PENDING_RATIFICATION.value)
+        .order_by(EthicsApplication.updated_at.desc())
+    ).unique().all()
+    full_board_apps = db.scalars(
+        select(EthicsApplication)
+        .options(joinedload(EthicsApplication.applicant), joinedload(EthicsApplication.college))
+        .where(EthicsApplication.status == AppStatus.FULL_BOARD.value)
+        .order_by(EthicsApplication.updated_at.desc())
+    ).unique().all()
+    pending_rows = []
+    for app in pending_apps:
+        approval = latest_approval_record(db, app.id)
+        pending_rows.append({
+            'application': app,
+            'affiliation': (app.department or 'Other UCC Academic/Administrative Unit') if is_direct_irb_affiliation(app.college) else app.college.name,
+            'approver': approval.approving_officer.full_name if approval and approval.approving_officer else '—',
+        })
+    return request.app.state.templates.TemplateResponse(
+        request, 'board_review_queue.html',
+        ctx(request, user, pending_ratification=pending_rows, full_board=full_board_apps)
+    )
+
+
 @router.get('/irb/meetings')
 def meetings_page(request: Request, db: Session = Depends(get_db)):
     user = require_user(request, db)
     require_roles(user, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.IRB_MEMBER.value, Role.SUPERADMIN.value)
-    meetings = db.scalars(select(IRBMeeting).order_by(IRBMeeting.meeting_date.desc())).all()
-    agenda_candidates = db.scalars(
-        select(EthicsApplication)
-        .options(joinedload(EthicsApplication.applicant))
-        .where(EthicsApplication.status.in_([
-            AppStatus.FULL_BOARD.value,
-            AppStatus.CONDITIONAL_APPROVAL_PENDING_RATIFICATION.value,
-        ]))
-        .order_by(EthicsApplication.updated_at)
-    ).unique().all()
-    full_board_apps = [a for a in agenda_candidates if a.status == AppStatus.FULL_BOARD.value]
-    pending_ratification_apps = [a for a in agenda_candidates if a.status == AppStatus.CONDITIONAL_APPROVAL_PENDING_RATIFICATION.value]
-    return request.app.state.templates.TemplateResponse(
-        request, 'meetings.html',
-        ctx(request, user, meetings=meetings, full_board_apps=full_board_apps,
-            pending_ratification_apps=pending_ratification_apps, agenda_candidates=agenda_candidates)
-    )
-
-
-@router.post('/irb/meetings')
-def create_meeting(
-    request: Request,
-    meeting_no: str = Form(...),
-    meeting_date: str = Form(...),
-    venue: str = Form(''),
-    meeting_link: str = Form(''),
-    db: Session = Depends(get_db),
-):
-    user = require_user(request, db)
-    require_roles(user, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value)
-    try:
-        when = datetime.fromisoformat(meeting_date)
-    except ValueError:
-        raise HTTPException(400, 'Enter a valid meeting date and time.')
-    if db.scalar(select(IRBMeeting.id).where(IRBMeeting.meeting_no == meeting_no.strip())):
-        raise HTTPException(400, 'Meeting number already exists.')
-    meeting = IRBMeeting(
-        meeting_no=meeting_no.strip(),
-        meeting_date=when,
-        venue=venue.strip() or None,
-        meeting_link=meeting_link.strip() or None,
-        created_by=user.id,
-    )
-    db.add(meeting)
-    db.commit()
-    return RedirectResponse(f'/irb/meetings/{meeting.id}', status_code=303)
+    return RedirectResponse('/irb/board-review', status_code=303)
 
 
 @router.get('/irb/meetings/{meeting_id}')
 def meeting_detail(request: Request, meeting_id: str, db: Session = Depends(get_db)):
     user = require_user(request, db)
     require_roles(user, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.IRB_MEMBER.value, Role.SUPERADMIN.value)
-    meeting = db.get(IRBMeeting, meeting_id)
-    if not meeting:
-        raise HTTPException(404, 'IRB meeting not found')
-    items = db.scalars(
-        select(IRBMeetingItem)
-        .options(joinedload(IRBMeetingItem.application).joinedload(EthicsApplication.applicant))
-        .where(IRBMeetingItem.meeting_id == meeting.id)
-        .order_by(IRBMeetingItem.agenda_no, IRBMeetingItem.added_at)
-    ).all()
-    agenda_candidates = db.scalars(
-        select(EthicsApplication)
-        .where(EthicsApplication.status.in_([
-            AppStatus.FULL_BOARD.value,
-            AppStatus.CONDITIONAL_APPROVAL_PENDING_RATIFICATION.value,
-        ]))
-        .order_by(EthicsApplication.updated_at)
-    ).all()
-    bundle_by_app = {item.application_id: latest_college_review_bundle(db, item.application_id) for item in items}
-    approval_by_app = {item.application_id: latest_approval_record(db, item.application_id) for item in items}
-    return request.app.state.templates.TemplateResponse(
-        request, 'meeting_detail.html',
-        ctx(request, user, meeting=meeting, items=items, agenda_candidates=agenda_candidates,
-            full_board_apps=[a for a in agenda_candidates if a.status == AppStatus.FULL_BOARD.value],
-            pending_ratification_apps=[a for a in agenda_candidates if a.status == AppStatus.CONDITIONAL_APPROVAL_PENDING_RATIFICATION.value],
-            college_bundle_by_app=bundle_by_app, approval_by_app=approval_by_app,
-            approval_officers=approval_officer_choices(db))
-    )
+    return RedirectResponse('/irb/board-review', status_code=303)
 
 
 @router.post('/irb/meetings/{meeting_id}/add')
-def add_meeting_item(
-    request: Request,
-    meeting_id: str,
-    application_id: str = Form(...),
-    agenda_no: str = Form(''),
-    db: Session = Depends(get_db),
-):
+def add_to_meeting(request: Request, meeting_id: str, db: Session = Depends(get_db)):
     user = require_user(request, db)
     require_roles(user, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value)
-    meeting = db.get(IRBMeeting, meeting_id)
-    app = get_app_or_404(db, application_id)
-    if not meeting:
-        raise HTTPException(404, 'IRB meeting not found')
-    if app.status not in {AppStatus.FULL_BOARD.value, AppStatus.CONDITIONAL_APPROVAL_PENDING_RATIFICATION.value}:
-        raise HTTPException(400, 'Only Full Board applications or approvals pending Board ratification can be scheduled here.')
-    if db.scalar(select(IRBMeetingItem.id).where(IRBMeetingItem.meeting_id == meeting.id, IRBMeetingItem.application_id == app.id)):
-        raise HTTPException(400, 'Application is already on this meeting agenda.')
-    db.add(IRBMeetingItem(meeting_id=meeting.id, application_id=app.id, agenda_no=agenda_no or None, added_by=user.id))
-    audit(db, user.id, 'application_scheduled_for_irb_meeting', app.id, meeting.meeting_no)
-    db.commit()
-    return RedirectResponse(f'/irb/meetings/{meeting.id}', status_code=303)
+    raise HTTPException(410, 'IRB meeting scheduling is no longer part of the portal workflow. Use Board Review and record the Board outcome when available.')
 
 
 @router.post('/irb/{app_id}/ratification')
@@ -2731,8 +2796,8 @@ def record_board_ratification(
     request: Request,
     app_id: str,
     decision: str = Form(...),
-    meeting_id: str = Form(...),
     ratifying_officer_id: str = Form(''),
+    board_reference: str = Form(''),
     note: str = Form(''),
     db: Session = Depends(get_db),
 ):
@@ -2746,21 +2811,19 @@ def record_board_ratification(
         return prerequisite_redirect(app.id, 'No pending Board-ratification approval record was found.', 'board-ratification')
     if decision not in {'ratify', 'ratify_conditions', 'defer', 'revoke'}:
         raise HTTPException(400, 'Select a valid Board decision.')
-    meeting = db.get(IRBMeeting, meeting_id)
-    if not meeting:
-        return prerequisite_redirect(app.id, 'Select the IRB Board meeting at which the recommendation was considered.', 'board-ratification')
-    if not db.scalar(select(IRBMeetingItem.id).where(IRBMeetingItem.meeting_id == meeting.id, IRBMeetingItem.application_id == app.id)):
-        raise HTTPException(400, 'This application is not listed on the selected IRB meeting agenda.')
-    officer = db.get(User, ratifying_officer_id) if ratifying_officer_id else user
+    officer = db.get(User, ratifying_officer_id) if ratifying_officer_id else None
     if not officer or not officer.active or officer.role not in {Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value}:
-        return prerequisite_redirect(app.id, 'Select the authorised officer recording the Board review outcome.', 'board-ratification')
+        return prerequisite_redirect(app.id, 'Select the authorised officer who gave or confirmed the final Board approval.', 'board-ratification')
     if decision == 'ratify_conditions' and not note.strip():
         return prerequisite_redirect(app.id, 'Enter the conditions imposed by the Board.', 'board-ratification')
 
     cert = db.get(ClearanceCertificate, approval.certificate_id)
-    approval.ratification_meeting_id = meeting.id
+    reference = board_reference.strip()
+    note_text = note.strip()
+    if reference:
+        note_text = f'Board reference: {reference}' + (f' | {note_text}' if note_text else '')
     approval.ratification_decision = decision
-    approval.ratification_note = note.strip() or None
+    approval.ratification_note = note_text or None
     approval.ratified_by = officer.id
     approval.ratification_recorded_by = user.id
     approval.ratified_at = datetime.utcnow()
@@ -2770,32 +2833,32 @@ def record_board_ratification(
         if cert:
             cert.status = 'valid'
             cert.conditions = note.strip() or approval.approval_note
-            refresh_clearance_pdf(cert, app, 'ethical_clearance')
+            refresh_clearance_pdf(db, cert, app, 'ethical_clearance')
         db.add(IRBDecision(
             application_id=app.id,
             decision='board_ratified_conditions' if decision == 'ratify_conditions' else 'board_ratified',
-            conditions=note.strip() or None,
-            meeting_id=meeting.id,
+            conditions=note_text or None,
+            meeting_id=None,
             decided_by=officer.id,
         ))
         transition(db, app, AppStatus.BOARD_RATIFIED.value, user.id,
-                   f'IRB Board ratified the ethical approval at {meeting.meeting_no}')
+                   f'IRB Board ratified the ethical approval' + (f' ({reference})' if reference else ''))
         transition(db, app, AppStatus.ACTIVE.value, user.id, 'IRB Board ratification completed; ethical approval remains active')
     elif decision == 'defer':
         approval.status = 'ratification_deferred'
         if cert:
             cert.status = 'suspended'
-            refresh_clearance_pdf(cert, app, 'conditional_clearance')
-        transition(db, app, AppStatus.DEFERRED.value, user.id, note.strip() or 'Board ratification deferred')
+            refresh_clearance_pdf(db, cert, app, 'conditional_clearance')
+        transition(db, app, AppStatus.DEFERRED.value, user.id, note_text or 'Board ratification deferred')
     else:
         approval.status = 'revoked'
         if cert:
             cert.status = 'revoked'
-            refresh_clearance_pdf(cert, app, 'conditional_clearance')
-        transition(db, app, AppStatus.REVOKED.value, user.id, note.strip() or 'Conditional ethical approval revoked by the IRB Board')
+            refresh_clearance_pdf(db, cert, app, 'conditional_clearance')
+        transition(db, app, AppStatus.REVOKED.value, user.id, note_text or 'Conditional ethical approval revoked by the IRB Board')
 
     audit(db, user.id, 'board_ratification_recorded', app.id,
-          f'{decision}; meeting={meeting.meeting_no}; officer={officer.full_name}')
+          f'{decision}; board_reference={reference or "not recorded"}; final_approval_by={officer.full_name}; recorded_by={user.full_name}')
     db.commit()
     return RedirectResponse(f'/applications/{app.id}', status_code=303)
 
@@ -2808,7 +2871,7 @@ def final_irb_decision(
     authority: str = Form(...),
     approving_officer_id: str = Form(''),
     conditions: str = Form(''),
-    meeting_id: str = Form(''),
+    decision_reference: str = Form(''),
     db: Session = Depends(get_db),
 ):
     user = require_user(request, db)
@@ -2830,18 +2893,14 @@ def final_irb_decision(
     officer = db.get(User, approving_officer_id) if approving_officer_id else user
     if not officer or not officer.active or officer.role not in {Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value}:
         return prerequisite_redirect(app.id, 'Select the authorised officer who reviewed and approved the application.', 'final-decision')
-    meeting = db.get(IRBMeeting, meeting_id) if meeting_id else None
-    if app.status == AppStatus.FULL_BOARD.value and not meeting:
-        return prerequisite_redirect(app.id, 'Select the IRB meeting at which the Full Board decision was made.', 'final-decision')
-    if meeting and not db.scalar(select(IRBMeetingItem.id).where(IRBMeetingItem.meeting_id == meeting.id, IRBMeetingItem.application_id == app.id)):
-        raise HTTPException(400, 'This application is not listed on the selected IRB meeting agenda.')
+    reference = decision_reference.strip()
 
     db.add(
         IRBDecision(
             application_id=app.id,
             decision=decision,
             conditions=conditions.strip() or None,
-            meeting_id=meeting.id if meeting else None,
+            meeting_id=None,
             decided_by=officer.id,
         )
     )
@@ -2859,7 +2918,7 @@ def final_irb_decision(
             recorded_by=user.id,
             approval_note=conditions.strip() or None,
             certificate_id=cert.id,
-            ratification_meeting_id=meeting.id if authority == 'IRB Board' and meeting else None,
+            ratification_meeting_id=None,
             ratification_decision='ratified' if authority == 'IRB Board' else None,
             ratified_by=officer.id if authority == 'IRB Board' else None,
             ratification_recorded_by=user.id if authority == 'IRB Board' else None,
@@ -2872,9 +2931,23 @@ def final_irb_decision(
         transition(db, app, AppStatus.DEFERRED.value, user.id, conditions or 'IRB decision deferred')
     else:
         transition(db, app, AppStatus.REJECTED.value, user.id, conditions or 'IRB application rejected')
-    audit(db, user.id, 'final_irb_decision', app.id, f'{decision}; approving_authority={authority}; approving_officer={officer.full_name}; recorded_by_role={user.role}')
+    audit(db, user.id, 'final_irb_decision', app.id, f'{decision}; approving_authority={authority}; approving_officer={officer.full_name}; decision_reference={reference or "not recorded"}; recorded_by_role={user.role}')
     db.commit()
     return RedirectResponse(f'/applications/{app.id}', status_code=303)
+
+
+@router.post('/certificates/{certificate_id}/regenerate')
+def regenerate_certificate(request: Request, certificate_id: str, db: Session = Depends(get_db)):
+    user = require_user(request, db)
+    require_roles(user, Role.SUPERADMIN.value, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value)
+    cert = db.get(ClearanceCertificate, certificate_id)
+    if not cert:
+        raise HTTPException(404, 'Certificate not found')
+    app = get_app_or_404(db, cert.application_id)
+    persist_certificate_blob(db, cert, app)
+    audit(db, user.id, 'certificate_pdf_regenerated', app.id, f'{cert.certificate_no}; QR refreshed using current public base URL')
+    db.commit()
+    return RedirectResponse(f'/applications/{app.id}?notice=certificate-regenerated', status_code=303)
 
 
 @router.get('/certificates/{certificate_id}/download')
@@ -2889,14 +2962,19 @@ def download_certificate(request: Request, certificate_id: str, db: Session = De
         allowed = True
     if not allowed:
         raise HTTPException(403)
-    if not cert.pdf_stored_name:
-        raise HTTPException(404, 'Certificate PDF has not been generated')
-    path = certificate_path(cert.pdf_stored_name)
-    if not path.exists():
-        raise HTTPException(404, 'Certificate file is missing')
+    try:
+        content = ensure_certificate_bytes(db, cert, app)
+    except Exception as exc:
+        audit(db, user.id, 'certificate_recovery_failed', app.id, f'{cert.certificate_no}; {type(exc).__name__}')
+        db.commit()
+        raise HTTPException(500, 'The certificate could not be rebuilt. Please contact the IRB Secretariat.')
     audit(db, user.id, 'certificate_downloaded', app.id, cert.certificate_no)
     db.commit()
-    return FileResponse(path, filename=f'{cert.certificate_no}.pdf', media_type='application/pdf')
+    return Response(
+        content=content,
+        media_type='application/pdf',
+        headers={'Content-Disposition': f'attachment; filename="{cert.certificate_no}.pdf"'},
+    )
 
 
 @router.post('/applications/{app_id}/post-approval')
@@ -3805,7 +3883,7 @@ def _authorise_review_report(request: Request, db: Session, document_id: str):
     allowed = False
     if user.role in {Role.SUPERADMIN.value, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value}:
         allowed = True
-    elif user.role == Role.IRB_MEMBER.value and db.scalar(select(IRBMeetingItem.id).where(IRBMeetingItem.application_id == app.id)):
+    elif user.role == Role.IRB_MEMBER.value and app.status in {AppStatus.CONDITIONAL_APPROVAL_PENDING_RATIFICATION.value, AppStatus.FULL_BOARD.value, AppStatus.AWAITING_FINAL_DECISION.value}:
         allowed = True
     elif user.role == Role.COLLEGE_ADMIN.value and assignment.level == 'college' and user.college_id == app.college_id:
         allowed = True
