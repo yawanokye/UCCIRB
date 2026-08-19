@@ -183,3 +183,12 @@ table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;p
 .verification-facts{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:18px}.verification-facts>div{border:1px solid var(--line);border-radius:10px;padding:14px;background:#fafbfe}.verification-facts strong,.verification-facts span,.verification-facts a{display:block}.verification-facts strong{font-size:12px;color:#626a7c;margin-bottom:4px}.verification-facts span,.verification-facts a{font-weight:750;color:var(--ucc-navy)}
 .verification-steps{line-height:1.8;color:#46506a}.verification-steps li{margin-bottom:7px}
 @media(max-width:780px){.service-identity-inner,.service-verification-card{align-items:flex-start;flex-direction:column}.verification-actions{width:100%;min-width:0}.verification-facts{grid-template-columns:1fr}}
+
+
+/* V24 next-action workflow */
+.next-required-action{margin-top:0;margin-bottom:22px}
+.next-action-grid{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:24px;align-items:center}
+.next-action-grid h2{margin:.25rem 0 .45rem}
+.next-action-grid p{margin:0;max-width:850px}
+.next-action-button{display:flex;align-items:center;justify-content:flex-end}
+@media (max-width:760px){.next-action-grid{grid-template-columns:1fr}.next-action-button{justify-content:flex-start}}
