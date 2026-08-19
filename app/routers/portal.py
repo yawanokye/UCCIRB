@@ -1087,6 +1087,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         direct_apps = [a for a in apps if is_direct_irb_affiliation(a.college)]
         college_path_apps = [a for a in apps if is_scientific_committee_college(a.college)]
         screening_apps = [a for a in apps if a.status in {AppStatus.SUBMITTED.value, AppStatus.SECRETARIAT_SCREENING.value}]
+        returned_for_irb_processing_apps = [a for a in apps if a.status in {AppStatus.RETURNED_TO_IRB.value, AppStatus.IRB_CLASSIFICATION.value}]
         exempt_pending_apps = [a for a in apps if a.status == AppStatus.EXEMPT_DETERMINATION_PENDING.value]
         final_decision_apps = [a for a in apps if a.status in {AppStatus.AWAITING_FINAL_DECISION.value, AppStatus.FULL_BOARD.value, AppStatus.DEFERRED.value}]
         return request.app.state.templates.TemplateResponse(
@@ -1095,6 +1096,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
             ctx(
                 request, user, apps=apps, pending_access=pending_access, post_requests=post_requests,
                 meetings_count=meetings_count, direct_apps=direct_apps, college_path_apps=college_path_apps, screening_apps=screening_apps, pending_attention=pending_attention,
+                returned_for_irb_processing_apps=returned_for_irb_processing_apps,
                 exempt_pending_apps=exempt_pending_apps, final_decision_apps=final_decision_apps,
             ),
         )
@@ -2217,11 +2219,12 @@ def exempt_determination(
     request: Request,
     app_id: str,
     determination: str = Form(...),
+    authority: str = Form(...),
     note: str = Form(''),
     db: Session = Depends(get_db),
 ):
     user = require_user(request, db)
-    require_roles(user, Role.IRB_CHAIR.value, Role.SUPERADMIN.value)
+    require_roles(user, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value)
     app = get_app_or_404(db, app_id)
     latest = latest_classification(db, app.id)
     legacy_exempt_pending = app.status == AppStatus.AWAITING_FINAL_DECISION.value and latest and latest.classification == 'exempt'
@@ -2229,10 +2232,13 @@ def exempt_determination(
         return prerequisite_redirect(app.id, 'The application must first be classified for an exempt determination.', 'exempt-determination')
     if determination not in {'confirm_exempt', 'expedited', 'full_board', 'return_clarification'}:
         raise HTTPException(400, 'Select a valid exemption determination.')
+    allowed_authorities = {'IRB Chairperson', 'IRB Board', 'Authorised IRB Officer'}
+    if authority not in allowed_authorities:
+        raise HTTPException(400, 'Select the approving authority for this determination.')
 
     if determination == 'confirm_exempt':
         db.add(IRBDecision(application_id=app.id, decision='exempt_confirmed', conditions=note.strip() or None, decided_by=user.id))
-        transition(db, app, AppStatus.EXEMPT_DETERMINED.value, user.id, 'Authorised IRB exemption determination confirmed')
+        transition(db, app, AppStatus.EXEMPT_DETERMINED.value, user.id, f'Authorised IRB exemption determination confirmed by {authority}')
         cert = issue_exemption_determination(db, app, user, note.strip() or None)
         transition(db, app, AppStatus.ACTIVE.value, user.id, f'IRB exemption determination issued: {cert.certificate_no}')
     elif determination in {'expedited', 'full_board'}:
@@ -2241,7 +2247,7 @@ def exempt_determination(
     else:
         db.add(IRBDecision(application_id=app.id, decision='clarification_required', conditions=note.strip() or None, decided_by=user.id))
         transition(db, app, AppStatus.IRB_REVISION.value, user.id, note.strip() or 'Clarification required before IRB determination can be completed')
-    audit(db, user.id, 'authorised_exempt_determination', app.id, determination)
+    audit(db, user.id, 'authorised_exempt_determination', app.id, f'{determination}; approving_authority={authority}; recorded_by_role={user.role}')
     db.commit()
     return RedirectResponse(f'/applications/{app.id}', status_code=303)
 
@@ -2381,12 +2387,13 @@ def final_irb_decision(
     request: Request,
     app_id: str,
     decision: str = Form(...),
+    authority: str = Form(...),
     conditions: str = Form(''),
     meeting_id: str = Form(''),
     db: Session = Depends(get_db),
 ):
     user = require_user(request, db)
-    require_roles(user, Role.IRB_CHAIR.value, Role.SUPERADMIN.value)
+    require_roles(user, Role.IRB_SECRETARIAT.value, Role.IRB_CHAIR.value, Role.SUPERADMIN.value)
     app = get_app_or_404(db, app_id)
     latest = latest_classification(db, app.id)
     if latest and latest.classification == 'exempt' and app.status in {AppStatus.EXEMPT_DETERMINATION_PENDING.value, AppStatus.AWAITING_FINAL_DECISION.value}:
@@ -2395,6 +2402,10 @@ def final_irb_decision(
         return prerequisite_redirect(app.id, 'Complete the required IRB review stage before recording the final IRB decision.', 'irb-prerequisite')
     if decision not in {'approved', 'approved_conditions', 'deferred', 'rejected'}:
         raise HTTPException(400, 'Select a valid IRB decision.')
+    if authority not in {'IRB Board', 'IRB Chairperson'}:
+        raise HTTPException(400, 'Select the approving authority for the final IRB decision.')
+    if app.status == AppStatus.FULL_BOARD.value and authority != 'IRB Board':
+        return prerequisite_redirect(app.id, 'A Full Board review must record the IRB Board as the approving authority.', 'final-decision')
     if decision == 'approved_conditions' and not conditions.strip():
         return prerequisite_redirect(app.id, 'Enter the approval conditions before recording an approval with conditions.', 'final-decision')
     meeting = db.get(IRBMeeting, meeting_id) if meeting_id else None
@@ -2414,7 +2425,7 @@ def final_irb_decision(
     )
     if decision in {'approved', 'approved_conditions'}:
         approval_status = AppStatus.FINAL_APPROVAL_CONDITIONS.value if decision == 'approved_conditions' else AppStatus.FINAL_APPROVAL.value
-        approval_note = conditions.strip() if decision == 'approved_conditions' else 'Final IRB approval granted'
+        approval_note = conditions.strip() if decision == 'approved_conditions' else f'Final IRB approval granted by {authority}'
         transition(db, app, approval_status, user.id, approval_note)
         cert = issue_clearance(db, app, user, conditions.strip() or None)
         transition(db, app, AppStatus.CLEARANCE_ISSUED.value, user.id, f'Ethics approval certificate issued: {cert.certificate_no}')
@@ -2423,7 +2434,7 @@ def final_irb_decision(
         transition(db, app, AppStatus.DEFERRED.value, user.id, conditions or 'IRB decision deferred')
     else:
         transition(db, app, AppStatus.REJECTED.value, user.id, conditions or 'IRB application rejected')
-    audit(db, user.id, 'final_irb_decision', app.id, decision)
+    audit(db, user.id, 'final_irb_decision', app.id, f'{decision}; approving_authority={authority}; recorded_by_role={user.role}')
     db.commit()
     return RedirectResponse(f'/applications/{app.id}', status_code=303)
 
