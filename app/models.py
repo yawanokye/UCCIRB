@@ -19,6 +19,7 @@ class Role(str, Enum):
     COLLEGE_ADMIN = "college_admin"
     COLLEGE_REVIEWER = "college_reviewer"
     IRB_REVIEWER = "irb_reviewer"
+    IRB_MEMBER = "irb_member"
     IRB_CHAIR = "irb_chair"
     SUPERADMIN = "superadmin"
 
@@ -51,6 +52,8 @@ class AppStatus(str, Enum):
     IRB_REVISED = "irb_revised_submission_received"
     FULL_BOARD = "scheduled_for_full_board_review"
     AWAITING_FINAL_DECISION = "awaiting_final_irb_decision"
+    CONDITIONAL_APPROVAL_PENDING_RATIFICATION = "ethical_approval_pending_board_ratification"
+    BOARD_RATIFIED = "board_ratification_completed"
     FINAL_APPROVAL = "final_irb_approval_granted"
     FINAL_APPROVAL_CONDITIONS = "final_irb_approval_with_conditions"
     APPROVED = "approved"
@@ -271,6 +274,58 @@ class ClearanceCertificate(Base):
     pdf_stored_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     application = relationship("EthicsApplication")
+
+
+class IRBProcessingReset(Base):
+    """Administrative correction that restores IRB processing to a known valid point.
+
+    Earlier classifications remain in the audit record but are treated as superseded for
+    operational routing when they pre-date the latest reset.
+    """
+    __tablename__ = "irb_processing_resets"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uuid4_str)
+    application_id: Mapped[str] = mapped_column(ForeignKey("applications.id"), index=True)
+    restored_status: Mapped[str] = mapped_column(String(80), default=AppStatus.RETURNED_TO_IRB.value)
+    reason: Mapped[str] = mapped_column(Text)
+    corrected_by: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    reset_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    application = relationship("EthicsApplication")
+    officer = relationship("User", foreign_keys=[corrected_by])
+
+
+class EthicalApprovalRecord(Base):
+    """Authorised ethical approval and subsequent Board ratification record.
+
+    College-pathway applications may receive an administrative ethical approval pending
+    formal Board ratification. Direct/final IRB approvals are also recorded here so the
+    approved-work register has one durable source of truth.
+    """
+    __tablename__ = "ethical_approval_records"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uuid4_str)
+    application_id: Mapped[str] = mapped_column(ForeignKey("applications.id"), index=True)
+    approval_type: Mapped[str] = mapped_column(String(50), index=True)  # conditional_pending_board | final_irb
+    status: Mapped[str] = mapped_column(String(50), default="pending_ratification", index=True)
+    approving_authority: Mapped[str] = mapped_column(String(120))
+    approved_by: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    recorded_by: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    approval_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    approved_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    certificate_id: Mapped[str | None] = mapped_column(ForeignKey("clearance_certificates.id"), nullable=True, index=True)
+    ratification_meeting_id: Mapped[str | None] = mapped_column(ForeignKey("irb_meetings.id"), nullable=True, index=True)
+    ratification_decision: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    ratification_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ratified_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    ratification_recorded_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    ratified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+
+    application = relationship("EthicsApplication")
+    approving_officer = relationship("User", foreign_keys=[approved_by])
+    recording_officer = relationship("User", foreign_keys=[recorded_by])
+    certificate = relationship("ClearanceCertificate")
+    ratification_meeting = relationship("IRBMeeting")
+    ratifying_officer = relationship("User", foreign_keys=[ratified_by])
+    ratification_recorder = relationship("User", foreign_keys=[ratification_recorded_by])
 
 
 class PostApprovalRequest(Base):

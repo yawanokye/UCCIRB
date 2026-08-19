@@ -12,7 +12,7 @@ from .config import (ALLOWED_HOSTS, APP_NAME, BASE_DIR, BOOTSTRAP_ADMIN_EMAIL, B
                      SESSION_MAX_AGE_SECONDS, STORAGE_DIR)
 from .database import Base, SessionLocal, engine
 from .routers import auth, portal
-from .models import (AppStatus, ApplicationDocument, College, CollegeAccessRequest, EthicsApplication, IRBClassification, ReviewReportDocument, ReviewReportFileBlob, ReviewerAssignment, Role, StatusHistory, User)
+from .models import (AppStatus, ApplicationDocument, ClearanceCertificate, College, CollegeAccessRequest, EthicsApplication, EthicalApprovalRecord, IRBClassification, ReviewReportDocument, ReviewReportFileBlob, ReviewerAssignment, Role, StatusHistory, User)
 from .services.auth import hash_password
 from .services.routing import ensure_routing_units, is_scientific_committee_college
 from .security import csrf_protect, request_rate_limit, security_headers
@@ -162,6 +162,36 @@ def migrate_v23_exempt_pending_state():
 
 migrate_v23_exempt_pending_state()
 
+
+def backfill_approved_work_register():
+    """Create register records for legacy ethics certificates issued before V25."""
+    with SessionLocal() as db:
+        certs = db.scalars(select(ClearanceCertificate)).all()
+        changed = False
+        for cert in certs:
+            if not (cert.certificate_no or '').startswith('UCC-IRB-EC-'):
+                continue
+            exists = db.scalar(select(EthicalApprovalRecord.id).where(EthicalApprovalRecord.certificate_id == cert.id))
+            if exists:
+                continue
+            db.add(EthicalApprovalRecord(
+                application_id=cert.application_id,
+                approval_type='final_irb',
+                status='final_approved' if cert.status == 'valid' else cert.status,
+                approving_authority='Final IRB approval (legacy record)',
+                approved_by=cert.issued_by,
+                recorded_by=cert.issued_by,
+                approval_note=cert.conditions,
+                approved_at=cert.issue_date,
+                certificate_id=cert.id,
+            ))
+            changed = True
+        if changed:
+            db.commit()
+
+
+backfill_approved_work_register()
+
 api_docs = {} if ENABLE_API_DOCS else {'docs_url': None, 'redoc_url': None, 'openapi_url': None}
 app = FastAPI(title=APP_NAME, dependencies=[Depends(csrf_protect)], **api_docs)
 
@@ -187,7 +217,7 @@ app.state.templates.env.globals['applicant_status_label'] = applicant_status_lab
 app.include_router(auth.router)
 app.include_router(portal.router)
 
-BUILD_ID = '2026-08-19-final-irb-approval-v23'
+BUILD_ID = '2026-08-19-college-admin-approval-ratification-v25'
 
 
 @app.exception_handler(HTTPException)
@@ -264,7 +294,16 @@ def healthz():
         'official_ucc_irb_reference': 'https://irb.ucc.edu.gh/',
         'irb_review_branches': ['exempt_determination', 'expedited_review', 'full_board_review'],
         'final_irb_approval_path': True,
+        'irb_next_action_panel': True,
+        'secretariat_authorised_decision_recording': True,
+        'college_recommendation_irb_action_queue': True,
         'ethics_certificate_qr_verification': True,
         'public_certificate_number_lookup': True,
         'applicant_internal_irb_classification_hidden': True,
+        'college_path_irb_classification_locked': True,
+        'irb_processing_reset_correction': True,
+        'conditional_ethics_approval_pending_board_ratification': True,
+        'board_ratification_workflow': True,
+        'approved_works_register': True,
+        'approved_works_register_csv': True,
     })
