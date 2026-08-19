@@ -2,7 +2,7 @@
 
 Safe Browsing remediation build. Adds explicit service identity disclosures, an About & Verification page, official UCC IRB reference/contact details, login/reviewer safety notices, and keeps the Google Search Console verification tag.
 
-Build: `2026-08-19-final-irb-approval-v23`
+Build: `2026-08-19-next-action-irb-v24`
 
 # UCC IRB Ethical Clearance Portal — Phase 2 V19
 
@@ -320,7 +320,7 @@ If a reviewer report disappeared before V18 because `/app/storage` was not persi
 The public base template includes the Google site verification token supplied for `https://ucc-irb-portal.onrender.com/`. After deployment, verify the URL-prefix property in Google Search Console, then inspect **Security & Manual Actions → Security Issues** before submitting a Safe Browsing review.
 
 
-## V23 final IRB approval workflow
+## V24 final IRB approval workflow
 - Splits IRB processing into Exempt Determination, Expedited Review, and Full Board Review.
 - Exempt classification now requires an authorised IRB determination instead of entering the generic final-approval route.
 - Existing V22 exempt cases in `awaiting_final_irb_decision` are migrated to `exempt_determination_pending`.
@@ -329,3 +329,58 @@ The public base template includes the Google site verification token supplied fo
 - Final approval automatically generates a UCC IRB Ethics Approval Certificate with a unique verification token and QR code.
 - QR codes resolve to the public verification page. Certificate numbers can also be verified at `/verify`.
 - Confirmed exempt protocols generate a separately labelled QR-verifiable Exemption Determination, not an Ethics Approval Certificate.
+
+
+## V24 workflow usability correction
+
+- Adds a prominent **Next Required Action** card to staff-facing application records.
+- Adds a Secretariat queue for College scientific recommendations that are ready for IRB classification.
+- Allows the IRB Secretariat to record an authorised Exempt determination or final IRB decision on behalf of the selected approving authority, while preserving the logged-in officer in the audit trail.
+- Requires the approving authority to be identified as IRB Chairperson, IRB Board, or Authorised IRB Officer as applicable.
+- Full Board decisions must identify the IRB Board as approving authority.
+
+## V25 workflow update — College recommendation, conditional approval and Board ratification
+
+Build ID: `2026-08-19-college-admin-approval-ratification-v25`
+
+### College Scientific Committee pathway
+
+For the five UCC Colleges with Scientific Committees, Exempt/Expedited/Full Board classification is no longer the normal step after College recommendation. The sequence is:
+
+1. Applicant submits centrally to IRB Secretariat.
+2. Secretariat screens and forwards complete applications to the relevant College Scientific Committee.
+3. College completes scientific review/revisions and records its recommendation.
+4. Application returns to IRB Secretariat for **Administrative IRB Review**.
+5. Authorised IRB action may:
+   - Grant **Ethical Approval Pending Board Ratification** and issue a QR-verifiable certificate immediately.
+   - Refer the College recommendation directly to Full Board review.
+   - Return the recommendation to the College Scientific Committee for clarification.
+6. Conditional approvals are added to a later IRB Board meeting for formal ratification.
+7. The Board may ratify, ratify with conditions, defer, or revoke the conditional approval.
+
+### Direct IRB pathway
+
+Applications from UCC academic/administrative units outside the five College Scientific Committees retain the Exempt / Expedited / Full Board classification workflow.
+
+### IRB processing correction
+
+Authorised IRB officers can restore a College-pathway application to **Returned to IRB Secretariat for IRB Processing** when an erroneous IRB classification was entered after College recommendation. The old classifications remain in the confidential audit trail and are displayed internally as superseded.
+
+### Approved Works Register
+
+`/secretariat/approved-register` maintains a sortable/searchable register containing:
+
+- applicant name and application reference;
+- College/UCC unit;
+- research title;
+- College Scientific reviewer;
+- officer who reviewed and approved;
+- approval date and current approval/ratification status;
+- Board meeting/ratification outcome where applicable;
+- certificate number and verification link.
+
+CSV export is available from the register.
+
+
+### IRB Board Member access
+System Administrators can create an **IRB Board Member** account. Board members have read-only access to IRB meetings, applications placed on an agenda, and the College Scientific Committee review report. Secretariat/Chair officers retain responsibility for recording the formal Board decision or ratification outcome.
