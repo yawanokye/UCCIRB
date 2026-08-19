@@ -192,3 +192,9 @@ table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;p
 .next-action-grid p{margin:0;max-width:850px}
 .next-action-button{display:flex;align-items:center;justify-content:flex-end}
 @media (max-width:760px){.next-action-grid{grid-template-columns:1fr}.next-action-button{justify-content:flex-start}}
+
+/* V25 approval/ratification states */
+.verification-banner.pending{background:#fff7d6;border-color:#d9a300;color:#5a4300}
+.status.pending_ratification,.status.ethical_approval_pending_board_ratification{background:#fff2bf;color:#6b5000;border:1px solid #d7a900}
+.status.superseded{background:#f1f2f5;color:#6b7280;border:1px solid #d8dbe3}
+.approval-register .certificate-link{white-space:nowrap}
