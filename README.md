@@ -1,3 +1,9 @@
+# UCC IRB Ethical Clearance Portal — V22
+
+Safe Browsing remediation build. Adds explicit service identity disclosures, an About & Verification page, official UCC IRB reference/contact details, login/reviewer safety notices, and keeps the Google Search Console verification tag.
+
+Build: `2026-08-19-next-action-irb-v24`
+
 # UCC IRB Ethical Clearance Portal — Phase 2 V19
 
 Build ID: `2026-08-18-secure-review-csrf-v20`
@@ -312,3 +318,23 @@ If a reviewer report disappeared before V18 because `/app/storage` was not persi
 ## V21 Google Search Console verification
 
 The public base template includes the Google site verification token supplied for `https://ucc-irb-portal.onrender.com/`. After deployment, verify the URL-prefix property in Google Search Console, then inspect **Security & Manual Actions → Security Issues** before submitting a Safe Browsing review.
+
+
+## V24 final IRB approval workflow
+- Splits IRB processing into Exempt Determination, Expedited Review, and Full Board Review.
+- Exempt classification now requires an authorised IRB determination instead of entering the generic final-approval route.
+- Existing V22 exempt cases in `awaiting_final_irb_decision` are migrated to `exempt_determination_pending`.
+- Internal IRB classification events are hidden from applicant-facing workflow history.
+- Expedited and Full Board approvals use a dedicated Final IRB Approval / Decision stage.
+- Final approval automatically generates a UCC IRB Ethics Approval Certificate with a unique verification token and QR code.
+- QR codes resolve to the public verification page. Certificate numbers can also be verified at `/verify`.
+- Confirmed exempt protocols generate a separately labelled QR-verifiable Exemption Determination, not an Ethics Approval Certificate.
+
+
+## V24 workflow usability correction
+
+- Adds a prominent **Next Required Action** card to staff-facing application records.
+- Adds a Secretariat queue for College scientific recommendations that are ready for IRB classification.
+- Allows the IRB Secretariat to record an authorised Exempt determination or final IRB decision on behalf of the selected approving authority, while preserving the logged-in officer in the audit trail.
+- Requires the approving authority to be identified as IRB Chairperson, IRB Board, or Authorised IRB Officer as applicable.
+- Full Board decisions must identify the IRB Board as approving authority.
