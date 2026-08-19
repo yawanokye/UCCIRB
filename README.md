@@ -394,3 +394,8 @@ System Administrators can create an **IRB Board Member** account. Board members 
 - An authorised officer records the Board outcome when communicated, with an optional Board reference/minute number.
 - The Approved Works Register now records the person who gave the conditional/initial approval and, once available, the person who gave or confirmed final approval/ratification.
 - A separate **Final Approval Register** contains only completed final approvals and includes applicant, College/unit, research title, College reviewer, conditional approver, final approver, approval dates and certificate/QR verification links.
+
+
+## V27 durable certificate storage
+
+Certificate PDFs are now stored in PostgreSQL as a durable fallback. If Render loses the filesystem copy after a restart or deploy, the download endpoint first uses the database copy and, for older records that have neither copy, automatically regenerates the PDF from the approval record. Regeneration keeps the same certificate number and verification token but rebuilds the QR code using `PUBLIC_BASE_URL` (or Render's `RENDER_EXTERNAL_URL`). Production should set `PUBLIC_BASE_URL` explicitly to the public HTTPS portal URL.
