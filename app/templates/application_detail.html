@@ -7,7 +7,7 @@
     <h1>{{ app.title }}</h1>
     <p>{{ app.applicant.full_name }} · {% if is_direct_irb %}{{ app.department or 'Other UCC academic/administrative unit' }}{% else %}{{ app.college.name }} · {{ app.department or 'Department not stated' }}{% endif %}</p>
   </div>
-  <span class="status big {{ app.status }}">{{ status_label(app.status) }}</span>
+  <span class="status big {{ app.status }}">{{ applicant_status_label(app.status) if user.id == app.applicant_id else status_label(app.status) }}</span>
 </div>
 
 {% if required_message %}<div class="alert danger prerequisite-alert" id="prerequisite-alert"><strong>Required before you continue:</strong> {{ required_message }}</div>{% endif %}
@@ -343,10 +343,30 @@
 </section>
 {% endif %}
 
-{% if classifications %}
+{% if classifications and user.role in ['irb_secretariat','irb_chair','superadmin'] %}
 <section class="card">
   <h2>IRB classifications</h2>
   <table><thead><tr><th>Date</th><th>Classification</th><th>Rationale</th></tr></thead><tbody>{% for c in classifications %}<tr><td>{{ c.classified_at.strftime('%d %b %Y') }}</td><td>{{ c.classification.replace('_',' ').title() }}</td><td>{{ c.rationale or '—' }}</td></tr>{% endfor %}</tbody></table>
+</section>
+{% endif %}
+
+{% if user.role in ['irb_chair','superadmin'] and app.status in ['exempt_determination_pending'] %}
+<section class="card actioncard goldline {% if required_target == 'exempt-determination' %}required-highlight{% endif %}" id="exempt-determination">
+  <h2>Authorised Exempt Determination</h2>
+  <p>The Secretariat classification is an internal screening step. The authorised IRB officer must make the determination. Confirming Exempt generates a separate QR-verifiable exemption determination, not the normal ethics approval certificate.</p>
+  <form method="post" action="/irb/{{ app.id }}/exempt-determination">
+    <div class="formgrid">
+      <label>Determination<select name="determination" required>
+        <option value="">Select determination</option>
+        <option value="confirm_exempt">Confirm Exempt Determination</option>
+        <option value="expedited">Not Exempt – Continue to Expedited Review</option>
+        <option value="full_board">Not Exempt – Continue toward Full Board Review</option>
+        <option value="return_clarification">Return to Applicant for Clarification</option>
+      </select></label>
+      <label class="wide">Determination note / reason<textarea name="note" rows="5" placeholder="Record the basis for the authorised determination or the clarification required."></textarea></label>
+    </div>
+    <button class="btn" type="submit">Record Authorised Determination</button>
+  </form>
 </section>
 {% endif %}
 
@@ -370,15 +390,15 @@
 
 {% if user.role in ['irb_chair','superadmin'] and app.status in ['awaiting_final_irb_decision','scheduled_for_full_board_review','deferred'] %}
 <section class="card actioncard redline {% if required_target == 'final-decision' %}required-highlight{% endif %}" id="final-decision">
-  <h2>Authorised final IRB decision</h2>
-  <p>The final decision is restricted to the IRB Chairperson or an authorised system-level authority.</p>
+  <h2>Final IRB Approval / Decision</h2>
+  <p>This is the final authorisation stage. Only the IRB Chairperson or an authorised system-level authority can grant final approval. An approval automatically generates a QR-verifiable UCC IRB Ethics Approval Certificate.</p>
   <form method="post" action="/irb/{{ app.id }}/decision">
     <div class="formgrid">
       <label>Decision<select name="decision" required><option value="approved">Approved</option><option value="approved_conditions">Approved with Conditions</option><option value="deferred">Deferred</option><option value="rejected">Rejected</option></select></label>
       <label>IRB meeting {% if app.status == 'scheduled_for_full_board_review' %}<span class="urgent">required</span>{% else %}<span class="optional">optional</span>{% endif %}<select name="meeting_id"><option value="">No meeting / Chair determination</option>{% for m in meetings %}<option value="{{ m.id }}">{{ m.meeting_no }} · {{ m.meeting_date.strftime('%d %b %Y') }}</option>{% endfor %}</select></label>
       <label class="wide">Conditions / decision reasons<textarea name="conditions" rows="5" placeholder="Record approval conditions, reasons for deferral, or reasons for rejection."></textarea></label>
     </div>
-    <button class="btn red" type="submit">Record Final IRB Decision</button>
+    <button class="btn red" type="submit">Record Final Approval / Decision</button>
   </form>
 </section>
 {% endif %}
@@ -392,8 +412,8 @@
 
 {% if certificates %}
 <section class="card">
-  <h2>Ethical clearance certificates</h2>
-  <table><thead><tr><th>Certificate</th><th>Issued</th><th>Expiry</th><th>Status</th><th></th></tr></thead><tbody>{% for c in certificates %}<tr><td>{{ c.certificate_no }}</td><td>{{ c.issue_date.strftime('%d %b %Y') }}</td><td>{{ c.expiry_date.strftime('%d %b %Y') }}</td><td><span class="status {{ c.status }}">{{ c.status.title() }}</span></td><td><a class="btn secondary smallbtn" href="/certificates/{{ c.id }}/download">Download PDF</a></td></tr>{% endfor %}</tbody></table>
+  <h2>IRB certificates and determinations</h2>
+  <table><thead><tr><th>Certificate</th><th>Issued</th><th>Expiry</th><th>Status</th><th></th></tr></thead><tbody>{% for c in certificates %}<tr><td>{{ c.certificate_no }}</td><td>{{ c.issue_date.strftime('%d %b %Y') }}</td><td>{{ c.expiry_date.strftime('%d %b %Y') }}</td><td><span class="status {{ c.status }}">{{ c.status.title() }}</span></td><td><div class="actions"><a class="btn secondary smallbtn" href="/certificates/{{ c.id }}/download">Download PDF</a><a class="btn secondary smallbtn" href="/verify/{{ c.verification_token }}" target="_blank">Verify</a></div></td></tr>{% endfor %}</tbody></table>
 </section>
 {% endif %}
 
@@ -437,7 +457,7 @@
 <section class="card">
   <h2>Application workflow history</h2>
   <ol class="timeline">
-    {% for h in status_history %}<li><strong>{{ status_label(h.to_status) }}</strong><small>{{ h.created_at.strftime('%d %b %Y %H:%M') }}</small>{% set visible_note = public_history_notes.get(h.id) if user.id == app.applicant_id else h.note %}{% if visible_note %}<div>{{ visible_note }}</div>{% endif %}</li>{% endfor %}
+    {% for h in status_history %}<li><strong>{{ applicant_status_label(h.to_status) if user.id == app.applicant_id else status_label(h.to_status) }}</strong><small>{{ h.created_at.strftime('%d %b %Y %H:%M') }}</small>{% set visible_note = public_history_notes.get(h.id) if user.id == app.applicant_id else h.note %}{% if visible_note %}<div>{{ visible_note }}</div>{% endif %}</li>{% endfor %}
   </ol>
 </section>
 {% endif %}

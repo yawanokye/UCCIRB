@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Verify UCC IRB Certificate{% endblock %}
+{% block content %}
+<div class="pagehead"><div><span class="eyebrow">Public verification</span><h1>Verify an IRB Certificate or Determination</h1><p>Enter the number printed on the UCC IRB ethics approval certificate or exemption determination. You can also scan the QR code printed on the document.</p></div></div>
+<section class="card" style="max-width:760px;margin:0 auto">
+  {% if not_found %}<div class="alert warning">No current UCC IRB record was found for <strong>{{ searched }}</strong>. Check the number and try again.</div>{% endif %}
+  <form method="get" action="/verify">
+    <label>Certificate / determination number<input type="text" name="certificate_no" value="{{ searched }}" placeholder="e.g. UCC-IRB-EC-2026-00001" required></label>
+    <button class="btn" type="submit">Verify Record</button>
+  </form>
+  <p class="hint">This public service displays only limited non-sensitive information. For additional confirmation, contact the UCC IRB Secretariat.</p>
+</section>
+{% endblock %}
